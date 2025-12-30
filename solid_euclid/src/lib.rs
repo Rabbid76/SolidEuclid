@@ -1,5 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn hello_wasm() -> String {
+    "Hello WASM!".to_string()
 }
 
 #[cfg(test)]
@@ -8,7 +11,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+        let result = hello_wasm();
+        assert_eq!(result, "Hello WASM!");
     }
 }
