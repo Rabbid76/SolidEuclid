@@ -1,0 +1,37 @@
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+# LLVM, Google, Chromiumm, Mozilla, WebKit, Microsoft, GNU
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+AlignAfterOpenBracket: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowBreakBeforeNoexceptSpecifier: Always
+AllowShortBlocksOnASingle: Empty
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+AllowShortNamespacesOnASingleLine: false
+BinPackArguments: false
+BinPackParameters: OnePerLine
+BreakBeforeTernaryOperators: true
+BreakBinaryOperations: RespectPrecedence
+BreakConstructorInitializers: BeforeComma
+BreakFunctionDefinitionParameters: true
+BreakInheritanceList: BeforeComma
+BreakAfterOpenBracketFunction: true
+BreakTemplateDeclarations: Yes
+IncludeBlocks: Merge
+IncludeCategories:
+  - Regex: '<.*?>'
+    Priority: 1
+    SortPriority: 1
+    CaseSensitive: true
+  - Regex: '^".*"$'
+    Priority: 2
+    SortPriority: 2
+    CaseSensitive: false
+IncludeIsMainRegex: 'none'
+NamespaceIndentation: All

@@ -1,7 +1,8 @@
+pub mod c_api;
 pub mod web_api;
 
 pub fn hello() -> String {
-    "Hello WASM!".to_string()
+    "Hello World!".to_string()
 }
 
 #[cfg(test)]
@@ -11,6 +12,6 @@ mod tests {
     #[test]
     fn it_works() {
         let result = hello();
-        assert_eq!(result, "Hello WASM!");
+        assert_eq!(result, "Hello World!");
     }
 }
