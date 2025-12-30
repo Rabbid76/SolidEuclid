@@ -7,6 +7,14 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: ['.internal/', 'dist/', 'node_modules/', 'pkg', 'solid_euclid/target/', 'target/'],
+    ignores: [
+      '.internal/',
+      'build*/',
+      'dist/',
+      'node_modules/',
+      'pkg',
+      'solid_euclid/target/',
+      'target/',
+    ],
   }
 );

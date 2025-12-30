@@ -3,7 +3,7 @@ import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
 
 export default defineConfig({
-  root: 'web/examples',
+  root: 'examples/web',
   plugins: [wasm()],
   resolve: {
     alias: {

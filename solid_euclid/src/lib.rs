@@ -1,8 +1,8 @@
-use wasm_bindgen::prelude::*;
+pub mod c_api;
+pub mod web_api;
 
-#[wasm_bindgen]
-pub fn hello_wasm() -> String {
-    "Hello WASM!".to_string()
+pub fn hello() -> String {
+    "Hello World!".to_string()
 }
 
 #[cfg(test)]
@@ -11,7 +11,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = hello_wasm();
-        assert_eq!(result, "Hello WASM!");
+        let result = hello();
+        assert_eq!(result, "Hello World!");
     }
 }
