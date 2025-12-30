@@ -1,13 +1,11 @@
 debug
 dist
 node_modules
+pkg
 target
-
 
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
 
-
-# IDE and CI
 

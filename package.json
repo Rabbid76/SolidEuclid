@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "build:wasm": "wasm-pack build solid_euclid --target web --out-dir ../pkg",
+    "dev": "npm run build:wasm && vite",
+    "build": "npm run build:wasm && tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -19,6 +20,7 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
-    "vite": "^6.0.6"
+    "vite": "^6.0.6",
+    "vite-plugin-wasm": "^3.4.1"
   }
 }

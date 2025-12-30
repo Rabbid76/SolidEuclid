@@ -13,6 +13,12 @@
     "moduleDetection": "force",
     "noEmit": true,
 
+    /* Path aliases */
+    "baseUrl": ".",
+    "paths": {
+      "@solid-euclid": ["pkg/solid_euclid"]
+    },
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,

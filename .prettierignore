@@ -1,6 +1,7 @@
 .internal/
 dist/
 node_modules/
+pkg/
 solid_euclid/
 target/
 *.lock
