@@ -1,0 +1,6 @@
+.internal/
+dist/
+node_modules/
+solid_euclid/
+target/
+*.lock
