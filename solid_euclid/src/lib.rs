@@ -1,5 +1,6 @@
 pub mod c_api;
 pub mod geometry_error;
+pub mod plane;
 pub mod polygon_mesh;
 pub mod triangular_mesh;
 pub mod vertex;
