@@ -37,6 +37,9 @@ impl Default for Polygon {
 }
 
 /// Represents a polygon mesh with vertices, polygons, and material mappings.
+///
+/// **Note:** All polygons in this mesh are assumed to be convex. Non-convex polygons
+/// may produce incorrect results during triangulation or other geometric operations.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PolygonMesh {
     /// The vertices of the mesh.
