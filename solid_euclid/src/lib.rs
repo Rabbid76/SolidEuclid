@@ -1,4 +1,5 @@
 pub mod c_api;
+pub mod triangular_mesh;
 pub mod vertex;
 pub mod web_api;
 

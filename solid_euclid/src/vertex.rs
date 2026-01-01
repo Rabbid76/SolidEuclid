@@ -1,5 +1,8 @@
 use glam::{DVec2, DVec3};
 
+/// Type alias for vertex indices.
+pub type Index = i32;
+
 /// Represents a vertex with position, normal, and UV coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
