@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use glam::DVec3;
+use glam::{DMat4, DVec2, DVec3, DVec4};
 
+use crate::geometry_error::GeometryError;
 use crate::vertex::{Index, Vertex};
 
 /// Represents a polygon defined by vertex indices.
@@ -114,12 +115,168 @@ impl PolygonMesh {
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty() && self.polygons.is_empty()
     }
+
+    /// Adds a new polygon to the mesh from a vector of vertices.
+    ///
+    /// This function adds all provided vertices to the mesh and creates a polygon
+    /// referencing them. The polygon's normal is calculated using the cross product
+    /// of vectors formed by the first three vertices.
+    ///
+    /// # Arguments
+    ///
+    /// * `geometry_id` - The geometry ID to associate with the polygon (for material mapping)
+    /// * `vertices` - A vector of vertices that define the polygon
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the polygon was successfully added.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GeometryError::InsufficientVertices)` if fewer than 3 vertices
+    /// were provided (a polygon requires at least 3 vertices).
+    ///
+    /// # Note
+    ///
+    /// The polygon is assumed to be convex. Non-convex polygons may produce incorrect
+    /// results during triangulation or other geometric operations.
+    pub fn add_convex_polygon_from_vertices(
+        &mut self,
+        geometry_id: i32,
+        vertices: Vec<Vertex>,
+    ) -> Result<(), GeometryError> {
+        if vertices.len() < 3 {
+            return Err(GeometryError::InsufficientVertices {
+                required: 3,
+                provided: vertices.len(),
+            });
+        }
+
+        // Calculate normal using cross product of first 3 vertices
+        let p0 = vertices[0].position;
+        let p1 = vertices[1].position;
+        let p2 = vertices[2].position;
+
+        let v1 = p1 - p0;
+        let v2 = p2 - p0;
+        let normal = v1.cross(v2).normalize();
+
+        // Add vertices and collect their indices
+        let start_index = self.vertices.len() as Index;
+        let indices: Vec<Index> = (0..vertices.len() as Index)
+            .map(|i| start_index + i)
+            .collect();
+
+        // Add all vertices to the mesh
+        for vertex in vertices {
+            self.vertices.push(vertex);
+        }
+
+        // Create and add the polygon
+        let polygon = Polygon::new(indices, normal, geometry_id);
+        self.polygons.push(polygon);
+
+        Ok(())
+    }
+
+    /// Adds a new polygon to the mesh from 2D points on a plane.
+    ///
+    /// This function creates a polygon from 2D points defined on a plane in 3D space.
+    /// The plane is specified by an origin point, a normal vector, and an x-axis direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `geometry_id` - The geometry ID to associate with the polygon (for material mapping)
+    /// * `origin` - The 3D origin point of the plane
+    /// * `normal` - The 3D normal vector of the plane (will be normalized)
+    /// * `x_axis` - The 3D x-axis direction for the coordinate system on the plane
+    /// * `points` - A vector of 2D points defining the polygon on the plane
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the polygon was successfully added.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GeometryError::InsufficientVertices)` if fewer than 3 points
+    /// were provided.
+    ///
+    /// # Coordinate System Construction
+    ///
+    /// The coordinate system is constructed as follows:
+    /// - Z-axis: normalized `normal`
+    /// - Y-axis: normalized cross product of Z-axis and `x_axis`
+    /// - X-axis: normalized cross product of Y-axis and Z-axis (recalculated for orthogonality)
+    ///
+    /// The UV coordinates of each vertex are set equal to the corresponding 2D point.
+    ///
+    /// # Note
+    ///
+    /// The polygon is assumed to be convex. Non-convex polygons may produce incorrect
+    /// results during triangulation or other geometric operations.
+    pub fn add_convex_polygon_from_points_on_plane(
+        &mut self,
+        geometry_id: i32,
+        origin: DVec3,
+        normal: DVec3,
+        x_axis: DVec3,
+        points: Vec<DVec2>,
+    ) -> Result<(), GeometryError> {
+        if points.len() < 3 {
+            return Err(GeometryError::InsufficientVertices {
+                required: 3,
+                provided: points.len(),
+            });
+        }
+
+        // Build the coordinate system
+        let z_axis = normal.normalize();
+        let y_axis = z_axis.cross(x_axis).normalize();
+        let x_axis_recalc = y_axis.cross(z_axis).normalize();
+
+        // Create the transformation matrix (column-major)
+        // Column 0: X-axis
+        // Column 1: Y-axis
+        // Column 2: Z-axis
+        // Column 3: Translation (origin)
+        let transform = DMat4::from_cols(
+            DVec4::new(x_axis_recalc.x, x_axis_recalc.y, x_axis_recalc.z, 0.0),
+            DVec4::new(y_axis.x, y_axis.y, y_axis.z, 0.0),
+            DVec4::new(z_axis.x, z_axis.y, z_axis.z, 0.0),
+            DVec4::new(origin.x, origin.y, origin.z, 1.0),
+        );
+
+        // Transform 2D points to 3D vertices
+        let start_index = self.vertices.len() as Index;
+        let mut indices: Vec<Index> = Vec::with_capacity(points.len());
+
+        for (i, point) in points.iter().enumerate() {
+            // Transform the 2D point (x, y, 0) to 3D
+            let local_pos = DVec4::new(point.x, point.y, 0.0, 1.0);
+            let world_pos = transform * local_pos;
+            let position = DVec3::new(world_pos.x, world_pos.y, world_pos.z);
+
+            // UV is equal to the 2D point
+            let uv = *point;
+
+            // The vertex normal is the plane normal
+            let vertex = Vertex::new(position, z_axis, uv);
+            self.vertices.push(vertex);
+            indices.push(start_index + i as Index);
+        }
+
+        // Create and add the polygon
+        let polygon = Polygon::new(indices, z_axis, geometry_id);
+        self.polygons.push(polygon);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::DVec2;
+    use crate::geometry_error::GeometryError;
 
     fn create_test_vertex(x: f64, y: f64, z: f64) -> Vertex {
         Vertex::new(
@@ -327,5 +484,542 @@ mod tests {
             mesh.get_polygon_material(&mesh.polygons[0]),
             Some(&"floor".to_string())
         );
+    }
+
+    // add_convex_polygon_from_vertices tests
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_triangle() {
+        let mut mesh = PolygonMesh::new();
+
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+            create_test_vertex(0.5, 1.0, 0.0),
+        ];
+
+        let result = mesh.add_convex_polygon_from_vertices(1, vertices);
+
+        assert!(result.is_ok());
+        assert_eq!(mesh.vertex_count(), 3);
+        assert_eq!(mesh.polygon_count(), 1);
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2]);
+        assert_eq!(mesh.polygons[0].geometry_id, 1);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_quad() {
+        let mut mesh = PolygonMesh::new();
+
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+            create_test_vertex(1.0, 1.0, 0.0),
+            create_test_vertex(0.0, 1.0, 0.0),
+        ];
+
+        let result = mesh.add_convex_polygon_from_vertices(2, vertices);
+
+        assert!(result.is_ok());
+        assert_eq!(mesh.vertex_count(), 4);
+        assert_eq!(mesh.polygon_count(), 1);
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2, 3]);
+        assert_eq!(mesh.polygons[0].geometry_id, 2);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_insufficient_vertices() {
+        let mut mesh = PolygonMesh::new();
+
+        // Test with 0 vertices
+        let result = mesh.add_convex_polygon_from_vertices(1, vec![]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 0
+            }
+        );
+        assert_eq!(mesh.vertex_count(), 0);
+        assert_eq!(mesh.polygon_count(), 0);
+
+        // Test with 1 vertex
+        let result = mesh.add_convex_polygon_from_vertices(1, vec![create_test_vertex(0.0, 0.0, 0.0)]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 1
+            }
+        );
+        assert_eq!(mesh.vertex_count(), 0);
+        assert_eq!(mesh.polygon_count(), 0);
+
+        // Test with 2 vertices
+        let result = mesh.add_convex_polygon_from_vertices(
+            1,
+            vec![
+                create_test_vertex(0.0, 0.0, 0.0),
+                create_test_vertex(1.0, 0.0, 0.0),
+            ],
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 2
+            }
+        );
+        assert_eq!(mesh.vertex_count(), 0);
+        assert_eq!(mesh.polygon_count(), 0);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_normal_calculation_xy_plane() {
+        let mut mesh = PolygonMesh::new();
+
+        // Triangle in XY plane (Z=0), counter-clockwise when viewed from +Z
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+            create_test_vertex(0.0, 1.0, 0.0),
+        ];
+
+        mesh.add_convex_polygon_from_vertices(1, vertices).unwrap();
+
+        // Normal should point in +Z direction
+        let normal = mesh.polygons[0].normal;
+        assert!((normal.x).abs() < 1e-10);
+        assert!((normal.y).abs() < 1e-10);
+        assert!((normal.z - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_normal_calculation_xz_plane() {
+        let mut mesh = PolygonMesh::new();
+
+        // Triangle in XZ plane (Y=0)
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(0.0, 0.0, 1.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+        ];
+
+        mesh.add_convex_polygon_from_vertices(1, vertices).unwrap();
+
+        // Normal should point in +Y direction
+        let normal = mesh.polygons[0].normal;
+        assert!((normal.x).abs() < 1e-10);
+        assert!((normal.y - 1.0).abs() < 1e-10);
+        assert!((normal.z).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_normal_calculation_yz_plane() {
+        let mut mesh = PolygonMesh::new();
+
+        // Triangle in YZ plane (X=0)
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(0.0, 1.0, 0.0),
+            create_test_vertex(0.0, 0.0, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_vertices(1, vertices).unwrap();
+
+        // Normal should point in +X direction
+        let normal = mesh.polygons[0].normal;
+        assert!((normal.x - 1.0).abs() < 1e-10);
+        assert!((normal.y).abs() < 1e-10);
+        assert!((normal.z).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_multiple_polygons() {
+        let mut mesh = PolygonMesh::new();
+
+        // Add first triangle
+        let vertices1 = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+            create_test_vertex(0.5, 1.0, 0.0),
+        ];
+        mesh.add_convex_polygon_from_vertices(1, vertices1).unwrap();
+
+        // Add second triangle
+        let vertices2 = vec![
+            create_test_vertex(2.0, 0.0, 0.0),
+            create_test_vertex(3.0, 0.0, 0.0),
+            create_test_vertex(2.5, 1.0, 0.0),
+        ];
+        mesh.add_convex_polygon_from_vertices(2, vertices2).unwrap();
+
+        assert_eq!(mesh.vertex_count(), 6);
+        assert_eq!(mesh.polygon_count(), 2);
+
+        // First polygon should have indices 0, 1, 2
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2]);
+        assert_eq!(mesh.polygons[0].geometry_id, 1);
+
+        // Second polygon should have indices 3, 4, 5
+        assert_eq!(mesh.polygons[1].indices, vec![3, 4, 5]);
+        assert_eq!(mesh.polygons[1].geometry_id, 2);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_preserves_vertex_data() {
+        let mut mesh = PolygonMesh::new();
+
+        let v0 = Vertex::new(
+            DVec3::new(1.0, 2.0, 3.0),
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec2::new(0.25, 0.75),
+        );
+        let v1 = Vertex::new(
+            DVec3::new(4.0, 5.0, 6.0),
+            DVec3::new(0.0, 1.0, 0.0),
+            DVec2::new(0.5, 0.5),
+        );
+        let v2 = Vertex::new(
+            DVec3::new(7.0, 8.0, 9.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        );
+
+        let vertices = vec![v0, v1, v2];
+        mesh.add_convex_polygon_from_vertices(1, vertices).unwrap();
+
+        // Verify vertex data is preserved
+        assert_eq!(mesh.vertices[0].position, v0.position);
+        assert_eq!(mesh.vertices[0].normal, v0.normal);
+        assert_eq!(mesh.vertices[0].uv, v0.uv);
+
+        assert_eq!(mesh.vertices[1].position, v1.position);
+        assert_eq!(mesh.vertices[1].normal, v1.normal);
+        assert_eq!(mesh.vertices[1].uv, v1.uv);
+
+        assert_eq!(mesh.vertices[2].position, v2.position);
+        assert_eq!(mesh.vertices[2].normal, v2.normal);
+        assert_eq!(mesh.vertices[2].uv, v2.uv);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_vertices_pentagon() {
+        let mut mesh = PolygonMesh::new();
+
+        let vertices = vec![
+            create_test_vertex(0.0, 0.0, 0.0),
+            create_test_vertex(1.0, 0.0, 0.0),
+            create_test_vertex(1.5, 0.5, 0.0),
+            create_test_vertex(0.5, 1.0, 0.0),
+            create_test_vertex(-0.5, 0.5, 0.0),
+        ];
+
+        let result = mesh.add_convex_polygon_from_vertices(1, vertices);
+
+        assert!(result.is_ok());
+        assert_eq!(mesh.vertex_count(), 5);
+        assert_eq!(mesh.polygon_count(), 1);
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2, 3, 4]);
+    }
+
+    // add_convex_polygon_from_points_on_plane tests
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_xy_plane_at_origin() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let x_axis = DVec3::X;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+
+        let result = mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points.clone());
+
+        assert!(result.is_ok());
+        assert_eq!(mesh.vertex_count(), 3);
+        assert_eq!(mesh.polygon_count(), 1);
+
+        // Check positions - should be in XY plane at Z=0
+        assert!((mesh.vertices[0].position - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[1].position - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[2].position - DVec3::new(0.5, 1.0, 0.0)).length() < 1e-10);
+
+        // Check UVs - should equal the 2D points
+        assert_eq!(mesh.vertices[0].uv, points[0]);
+        assert_eq!(mesh.vertices[1].uv, points[1]);
+        assert_eq!(mesh.vertices[2].uv, points[2]);
+
+        // Check normals - should be Z
+        assert!((mesh.vertices[0].normal - DVec3::Z).length() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_translated() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::new(10.0, 20.0, 30.0);
+        let normal = DVec3::Z;
+        let x_axis = DVec3::X;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points).unwrap();
+
+        // Positions should be translated by origin
+        assert!((mesh.vertices[0].position - DVec3::new(10.0, 20.0, 30.0)).length() < 1e-10);
+        assert!((mesh.vertices[1].position - DVec3::new(11.0, 20.0, 30.0)).length() < 1e-10);
+        assert!((mesh.vertices[2].position - DVec3::new(10.0, 21.0, 30.0)).length() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_xz_plane() {
+        let mut mesh = PolygonMesh::new();
+
+        // Plane in XZ (normal pointing +Y)
+        let origin = DVec3::ZERO;
+        let normal = DVec3::Y;
+        let x_axis = DVec3::X;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points).unwrap();
+
+        // Y-axis of plane = cross(Z, X) = cross(Y, X) = -Z, so local Y maps to -Z
+        // X-axis of plane = cross(Y_plane, Z_plane) = cross(-Z, Y) = X
+        // So (x, y, 0) -> (x, 0, -y) in world
+        assert!((mesh.vertices[0].position - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[1].position - DVec3::new(1.0, 0.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[2].position - DVec3::new(0.0, 0.0, -1.0)).length() < 1e-10);
+
+        // Normal should be +Y
+        assert!((mesh.polygons[0].normal - DVec3::Y).length() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_yz_plane() {
+        let mut mesh = PolygonMesh::new();
+
+        // Plane in YZ (normal pointing +X)
+        let origin = DVec3::ZERO;
+        let normal = DVec3::X;
+        let x_axis = DVec3::Y;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points).unwrap();
+
+        // Z-axis = X (normal)
+        // Y-axis = cross(X, Y) = Z
+        // X-axis = cross(Z, X) = Y
+        // So local (x, y, 0) maps to (0, x, y) in world
+        assert!((mesh.vertices[0].position - DVec3::new(0.0, 0.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[1].position - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-10);
+        assert!((mesh.vertices[2].position - DVec3::new(0.0, 0.0, 1.0)).length() < 1e-10);
+
+        // Normal should be +X
+        assert!((mesh.polygons[0].normal - DVec3::X).length() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_insufficient_points() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let x_axis = DVec3::X;
+
+        // Test with 0 points
+        let result = mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, vec![]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 0
+            }
+        );
+        assert_eq!(mesh.vertex_count(), 0);
+
+        // Test with 1 point
+        let result = mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, vec![DVec2::ZERO]);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 1
+            }
+        );
+
+        // Test with 2 points
+        let result = mesh.add_convex_polygon_from_points_on_plane(
+            1,
+            origin,
+            normal,
+            x_axis,
+            vec![DVec2::ZERO, DVec2::X],
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            GeometryError::InsufficientVertices {
+                required: 3,
+                provided: 2
+            }
+        );
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_quad() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let x_axis = DVec3::X;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(0.0, 1.0),
+        ];
+
+        let result = mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points);
+
+        assert!(result.is_ok());
+        assert_eq!(mesh.vertex_count(), 4);
+        assert_eq!(mesh.polygon_count(), 1);
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_uv_equals_points() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::new(5.0, 5.0, 5.0);
+        let normal = DVec3::new(1.0, 1.0, 1.0); // Arbitrary normal
+        let x_axis = DVec3::new(1.0, -1.0, 0.0);
+        let points = vec![
+            DVec2::new(0.25, 0.75),
+            DVec2::new(0.5, 0.1),
+            DVec2::new(0.9, 0.8),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points.clone()).unwrap();
+
+        // UVs should exactly match the input points
+        assert_eq!(mesh.vertices[0].uv, points[0]);
+        assert_eq!(mesh.vertices[1].uv, points[1]);
+        assert_eq!(mesh.vertices[2].uv, points[2]);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_vertex_normals() {
+        let mut mesh = PolygonMesh::new();
+
+        let origin = DVec3::ZERO;
+        let normal = DVec3::new(1.0, 2.0, 3.0); // Non-unit normal
+        let x_axis = DVec3::X;
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points).unwrap();
+
+        let expected_normal = normal.normalize();
+
+        // All vertex normals should be the normalized plane normal
+        for vertex in &mesh.vertices {
+            assert!((vertex.normal - expected_normal).length() < 1e-10);
+        }
+
+        // Polygon normal should also be normalized
+        assert!((mesh.polygons[0].normal - expected_normal).length() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_multiple_polygons() {
+        let mut mesh = PolygonMesh::new();
+
+        // First polygon on XY plane
+        let points1 = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+        mesh.add_convex_polygon_from_points_on_plane(1, DVec3::ZERO, DVec3::Z, DVec3::X, points1).unwrap();
+
+        // Second polygon on a different plane
+        let points2 = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(1.0, 2.0),
+        ];
+        mesh.add_convex_polygon_from_points_on_plane(
+            2,
+            DVec3::new(5.0, 0.0, 0.0),
+            DVec3::Z,
+            DVec3::X,
+            points2,
+        ).unwrap();
+
+        assert_eq!(mesh.vertex_count(), 6);
+        assert_eq!(mesh.polygon_count(), 2);
+        assert_eq!(mesh.polygons[0].indices, vec![0, 1, 2]);
+        assert_eq!(mesh.polygons[1].indices, vec![3, 4, 5]);
+        assert_eq!(mesh.polygons[0].geometry_id, 1);
+        assert_eq!(mesh.polygons[1].geometry_id, 2);
+    }
+
+    #[test]
+    fn test_add_convex_polygon_from_points_on_plane_orthogonalization() {
+        let mut mesh = PolygonMesh::new();
+
+        // Use a non-orthogonal x_axis (45 degrees from ideal)
+        let origin = DVec3::ZERO;
+        let normal = DVec3::Z;
+        let x_axis = DVec3::new(1.0, 1.0, 0.0); // 45 degrees in XY plane
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        ];
+
+        mesh.add_convex_polygon_from_points_on_plane(1, origin, normal, x_axis, points).unwrap();
+
+        // The recalculated x-axis should be normalized and orthogonal to z
+        // z = (0, 0, 1)
+        // y = cross(z, x_axis) = cross((0,0,1), (1,1,0)) = (-1, 1, 0) normalized = (-0.707, 0.707, 0)
+        // x = cross(y, z) = cross((-0.707, 0.707, 0), (0, 0, 1)) = (0.707, 0.707, 0)
+        
+        let sqrt2_inv = 1.0 / 2.0_f64.sqrt();
+        
+        // Point (1, 0) should map to (sqrt2_inv, sqrt2_inv, 0)
+        assert!((mesh.vertices[1].position.x - sqrt2_inv).abs() < 1e-10);
+        assert!((mesh.vertices[1].position.y - sqrt2_inv).abs() < 1e-10);
+        assert!(mesh.vertices[1].position.z.abs() < 1e-10);
+
+        // Point (0, 1) should map to (-sqrt2_inv, sqrt2_inv, 0)
+        assert!((mesh.vertices[2].position.x - (-sqrt2_inv)).abs() < 1e-10);
+        assert!((mesh.vertices[2].position.y - sqrt2_inv).abs() < 1e-10);
+        assert!(mesh.vertices[2].position.z.abs() < 1e-10);
     }
 }
