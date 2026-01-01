@@ -1,4 +1,5 @@
 pub mod c_api;
+pub mod vertex;
 pub mod web_api;
 
 pub fn hello() -> String {
