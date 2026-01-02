@@ -250,5 +250,7 @@
 - `cargo update`: Update dependencies in `Cargo.lock`.
 - `cargo install <crate>`: Install binary crate locally.
 - `cargo add <crate>`: Add dependency to `Cargo.toml`.
-- `cargo clippy`: Run linter.
-- `cargo fmt`: Format code.
+- `cargo clippy`: Run linter (static analysis, catches common mistakes and suggests improvements).
+- `cargo clippy --fix`: Run linter and automatically apply suggested fixes.
+- `cargo fix`: Automatically apply compiler suggestions (e.g., edition migration, unused imports).
+- `cargo fmt`: Format code according to Rust style guidelines.
