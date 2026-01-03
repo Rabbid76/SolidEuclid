@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(mesh.len(), 1);
 
         let geometry = mesh.get("tri_material").unwrap();
-        assert_eq!(geometry.vertices.len(), 3);
+        assert_eq!(geometry.vertex_count(), 3);
         assert_eq!(geometry.indices.len(), 3); // 1 triangle = 3 indices
     }
 
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(mesh.len(), 1);
 
         let geometry = mesh.get("quad_material").unwrap();
-        assert_eq!(geometry.vertices.len(), 4);
+        assert_eq!(geometry.vertex_count(), 4);
         assert_eq!(geometry.indices.len(), 6); // 2 triangles = 6 indices (fan triangulation)
     }
 

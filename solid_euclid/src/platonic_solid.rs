@@ -745,7 +745,7 @@ mod tests {
 
         // Each geometry should have 3 vertices (one triangle per face)
         for (_, geometry) in &mesh.geometries {
-            assert_eq!(geometry.vertices.len(), 3);
+            assert_eq!(geometry.vertex_count(), 3);
             assert_eq!(geometry.indices.len(), 3);
         }
     }
@@ -763,7 +763,7 @@ mod tests {
 
         // Each quad becomes 2 triangles
         for (_, geometry) in &mesh.geometries {
-            assert_eq!(geometry.vertices.len(), 4);
+            assert_eq!(geometry.vertex_count(), 4);
             assert_eq!(geometry.indices.len(), 6); // 2 triangles * 3 indices
         }
     }
@@ -781,7 +781,7 @@ mod tests {
 
         // Each pentagon becomes 3 triangles (n-2 triangles for n-gon)
         for (_, geometry) in &mesh.geometries {
-            assert_eq!(geometry.vertices.len(), 5);
+            assert_eq!(geometry.vertex_count(), 5);
             assert_eq!(geometry.indices.len(), 9); // 3 triangles * 3 indices
         }
     }

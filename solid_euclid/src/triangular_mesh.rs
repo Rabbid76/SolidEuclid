@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
 use crate::polygon_mesh::PolygonMesh;
-use crate::vertex::{Index, VertexF32};
+use crate::vertex::Index;
 
-/// Represents a triangular geometry with vertices and indices.
+/// Represents a triangular geometry with flat arrays for vertices, normals, and UVs.
 ///
-/// This struct uses single-precision floats (`f32`) via [`VertexF32`] for vertex data,
-/// making it suitable for GPU-based rendering pipelines. It is designed to be used
-/// with graphics APIs and renderers such as three.js, WebGL, WebGPU, and other
-/// GPU-accelerated rendering systems that typically operate with 32-bit floats.
+/// This struct uses single-precision floats (`f32`) stored in flat arrays,
+/// making it suitable for GPU-based rendering pipelines. The flat array format
+/// is designed for direct use with graphics APIs like three.js, WebGL, WebGPU,
+/// and other GPU-accelerated rendering systems that typically operate with
+/// `Float32Array` buffers.
+///
+/// - `vertices`: Every 3 consecutive elements represent a vertex position (x, y, z)
+/// - `normals`: Every 3 consecutive elements represent a normal vector (x, y, z)
+/// - `uvs`: Every 2 consecutive elements represent texture coordinates (u, v)
 ///
 /// For high-precision geometric calculations and construction, use
 /// [`PolygonMesh`](crate::polygon_mesh::PolygonMesh) with double-precision
@@ -16,8 +21,12 @@ use crate::vertex::{Index, VertexF32};
 /// via [`TriangularMesh::from_polygon_mesh`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TriangularGeometry {
-    /// The vertices of the geometry using single-precision floats.
-    pub vertices: Vec<VertexF32>,
+    /// Flat array of vertex positions. Every 3 consecutive elements (x, y, z) form one vertex.
+    pub vertices: Vec<f32>,
+    /// Flat array of normal vectors. Every 3 consecutive elements (x, y, z) form one normal.
+    pub normals: Vec<f32>,
+    /// Flat array of texture coordinates. Every 2 consecutive elements (u, v) form one UV coordinate.
+    pub uvs: Vec<f32>,
     /// The indices defining the triangles.
     pub indices: Vec<Index>,
 }
@@ -27,13 +36,35 @@ impl TriangularGeometry {
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
+            normals: Vec::new(),
+            uvs: Vec::new(),
             indices: Vec::new(),
         }
     }
 
-    /// Creates a new `TriangularGeometry` with the given vertices and indices.
-    pub fn with_data(vertices: Vec<VertexF32>, indices: Vec<Index>) -> Self {
-        Self { vertices, indices }
+    /// Creates a new `TriangularGeometry` with the given data.
+    ///
+    /// # Arguments
+    /// * `vertices` - Flat array of vertex positions (every 3 elements = x, y, z)
+    /// * `normals` - Flat array of normal vectors (every 3 elements = x, y, z)
+    /// * `uvs` - Flat array of texture coordinates (every 2 elements = u, v)
+    /// * `indices` - Triangle indices
+    pub fn with_data(vertices: Vec<f32>, normals: Vec<f32>, uvs: Vec<f32>, indices: Vec<Index>) -> Self {
+        Self { vertices, normals, uvs, indices }
+    }
+
+    /// Returns the number of vertices in the geometry.
+    ///
+    /// This is calculated from the vertices array length divided by 3.
+    pub fn vertex_count(&self) -> usize {
+        self.vertices.len() / 3
+    }
+
+    /// Adds a vertex with position, normal, and UV coordinates.
+    pub fn add_vertex(&mut self, position: [f32; 3], normal: [f32; 3], uv: [f32; 2]) {
+        self.vertices.extend_from_slice(&position);
+        self.normals.extend_from_slice(&normal);
+        self.uvs.extend_from_slice(&uv);
     }
 }
 
@@ -135,10 +166,14 @@ impl TriangularMesh {
                 let mut local_indices: Vec<Index> = Vec::new();
                 for &orig_idx in &polygon.indices {
                     let new_idx = *vertex_map.entry(orig_idx).or_insert_with(|| {
-                        let idx = geometry.vertices.len() as Index;
+                        let idx = geometry.vertex_count() as Index;
                         if let Some(vertex) = polygon_mesh.vertices.get(orig_idx as usize) {
-                            // Convert Vertex (f64) to VertexF32 (f32)
-                            geometry.vertices.push(vertex.to_f32());
+                            // Convert Vertex (f64) to f32 flat arrays
+                            geometry.add_vertex(
+                                [vertex.position.x as f32, vertex.position.y as f32, vertex.position.z as f32],
+                                [vertex.normal.x as f32, vertex.normal.y as f32, vertex.normal.z as f32],
+                                [vertex.uv.x as f32, vertex.uv.y as f32],
+                            );
                         }
                         idx
                     });
@@ -171,15 +206,7 @@ mod tests {
     use super::*;
     use crate::polygon_mesh::Polygon;
     use crate::vertex::Vertex;
-    use glam::{DVec2, DVec3, Vec2, Vec3};
-
-    fn create_test_vertex_f32(x: f32, y: f32, z: f32) -> VertexF32 {
-        VertexF32::new(
-            Vec3::new(x, y, z),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec2::new(0.0, 0.0),
-        )
-    }
+    use glam::{DVec2, DVec3};
 
     fn create_test_vertex(x: f64, y: f64, z: f64) -> Vertex {
         Vertex::new(
@@ -189,14 +216,25 @@ mod tests {
         )
     }
 
-    fn create_test_triangle() -> (Vec<VertexF32>, Vec<Index>) {
+    /// Creates test triangle data (vertices, normals, uvs, indices) in flat array format
+    fn create_test_triangle() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<Index>) {
         let vertices = vec![
-            create_test_vertex_f32(0.0, 0.0, 0.0),
-            create_test_vertex_f32(1.0, 0.0, 0.0),
-            create_test_vertex_f32(0.5, 1.0, 0.0),
+            0.0, 0.0, 0.0,  // vertex 0
+            1.0, 0.0, 0.0,  // vertex 1
+            0.5, 1.0, 0.0,  // vertex 2
+        ];
+        let normals = vec![
+            0.0, 1.0, 0.0,  // normal 0
+            0.0, 1.0, 0.0,  // normal 1
+            0.0, 1.0, 0.0,  // normal 2
+        ];
+        let uvs = vec![
+            0.0, 0.0,  // uv 0
+            0.0, 0.0,  // uv 1
+            0.0, 0.0,  // uv 2
         ];
         let indices = vec![0, 1, 2];
-        (vertices, indices)
+        (vertices, normals, uvs, indices)
     }
 
     // TriangularGeometry tests
@@ -206,7 +244,10 @@ mod tests {
         let geometry = TriangularGeometry::new();
 
         assert!(geometry.vertices.is_empty());
+        assert!(geometry.normals.is_empty());
+        assert!(geometry.uvs.is_empty());
         assert!(geometry.indices.is_empty());
+        assert_eq!(geometry.vertex_count(), 0);
     }
 
     #[test]
@@ -214,24 +255,62 @@ mod tests {
         let geometry = TriangularGeometry::default();
 
         assert!(geometry.vertices.is_empty());
+        assert!(geometry.normals.is_empty());
+        assert!(geometry.uvs.is_empty());
         assert!(geometry.indices.is_empty());
     }
 
     #[test]
     fn test_triangular_geometry_with_data() {
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices.clone(), indices.clone());
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(
+            vertices.clone(),
+            normals.clone(),
+            uvs.clone(),
+            indices.clone(),
+        );
 
-        assert_eq!(geometry.vertices.len(), 3);
+        assert_eq!(geometry.vertices.len(), 9); // 3 vertices * 3 components
+        assert_eq!(geometry.normals.len(), 9);  // 3 normals * 3 components
+        assert_eq!(geometry.uvs.len(), 6);       // 3 uvs * 2 components
         assert_eq!(geometry.indices.len(), 3);
+        assert_eq!(geometry.vertex_count(), 3);
         assert_eq!(geometry.vertices, vertices);
+        assert_eq!(geometry.normals, normals);
+        assert_eq!(geometry.uvs, uvs);
         assert_eq!(geometry.indices, indices);
     }
 
     #[test]
+    fn test_triangular_geometry_add_vertex() {
+        let mut geometry = TriangularGeometry::new();
+        
+        geometry.add_vertex([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], [0.5, 0.5]);
+        
+        assert_eq!(geometry.vertex_count(), 1);
+        assert_eq!(geometry.vertices, vec![1.0, 2.0, 3.0]);
+        assert_eq!(geometry.normals, vec![0.0, 1.0, 0.0]);
+        assert_eq!(geometry.uvs, vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn test_triangular_geometry_add_multiple_vertices() {
+        let mut geometry = TriangularGeometry::new();
+        
+        geometry.add_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]);
+        geometry.add_vertex([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0]);
+        geometry.add_vertex([0.5, 1.0, 0.0], [0.0, 1.0, 0.0], [0.5, 1.0]);
+        
+        assert_eq!(geometry.vertex_count(), 3);
+        assert_eq!(geometry.vertices.len(), 9);
+        assert_eq!(geometry.normals.len(), 9);
+        assert_eq!(geometry.uvs.len(), 6);
+    }
+
+    #[test]
     fn test_triangular_geometry_clone() {
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         let cloned = geometry.clone();
 
@@ -240,11 +319,11 @@ mod tests {
 
     #[test]
     fn test_triangular_geometry_equality() {
-        let (vertices1, indices1) = create_test_triangle();
-        let (vertices2, indices2) = create_test_triangle();
+        let (vertices1, normals1, uvs1, indices1) = create_test_triangle();
+        let (vertices2, normals2, uvs2, indices2) = create_test_triangle();
 
-        let geometry1 = TriangularGeometry::with_data(vertices1, indices1);
-        let geometry2 = TriangularGeometry::with_data(vertices2, indices2);
+        let geometry1 = TriangularGeometry::with_data(vertices1, normals1, uvs1, indices1);
+        let geometry2 = TriangularGeometry::with_data(vertices2, normals2, uvs2, indices2);
         let geometry3 = TriangularGeometry::new();
 
         assert_eq!(geometry1, geometry2);
@@ -272,8 +351,8 @@ mod tests {
 
     #[test]
     fn test_triangular_mesh_with_geometries() {
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         let mut geometries = HashMap::new();
         geometries.insert("material1".to_string(), geometry);
@@ -288,8 +367,8 @@ mod tests {
     #[test]
     fn test_triangular_mesh_insert() {
         let mut mesh = TriangularMesh::new();
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         mesh.insert("wood".to_string(), geometry.clone());
 
@@ -301,8 +380,8 @@ mod tests {
     #[test]
     fn test_triangular_mesh_get() {
         let mut mesh = TriangularMesh::new();
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         mesh.insert("metal".to_string(), geometry.clone());
 
@@ -318,11 +397,11 @@ mod tests {
         mesh.insert("material".to_string(), geometry);
 
         if let Some(geo) = mesh.get_mut("material") {
-            geo.vertices.push(create_test_vertex_f32(1.0, 2.0, 3.0));
+            geo.add_vertex([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], [0.5, 0.5]);
             geo.indices.push(0);
         }
 
-        assert_eq!(mesh.get("material").unwrap().vertices.len(), 1);
+        assert_eq!(mesh.get("material").unwrap().vertex_count(), 1);
         assert_eq!(mesh.get("material").unwrap().indices.len(), 1);
     }
 
@@ -330,11 +409,11 @@ mod tests {
     fn test_triangular_mesh_multiple_materials() {
         let mut mesh = TriangularMesh::new();
 
-        let (vertices1, indices1) = create_test_triangle();
-        let geometry1 = TriangularGeometry::with_data(vertices1, indices1);
+        let (vertices1, normals1, uvs1, indices1) = create_test_triangle();
+        let geometry1 = TriangularGeometry::with_data(vertices1, normals1, uvs1, indices1);
 
-        let (vertices2, indices2) = create_test_triangle();
-        let geometry2 = TriangularGeometry::with_data(vertices2, indices2);
+        let (vertices2, normals2, uvs2, indices2) = create_test_triangle();
+        let geometry2 = TriangularGeometry::with_data(vertices2, normals2, uvs2, indices2);
 
         mesh.insert("material_a".to_string(), geometry1);
         mesh.insert("material_b".to_string(), geometry2);
@@ -347,8 +426,8 @@ mod tests {
     #[test]
     fn test_triangular_mesh_clone() {
         let mut mesh = TriangularMesh::new();
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         mesh.insert("material".to_string(), geometry);
 
@@ -362,8 +441,8 @@ mod tests {
         let mut mesh1 = TriangularMesh::new();
         let mut mesh2 = TriangularMesh::new();
 
-        let (vertices, indices) = create_test_triangle();
-        let geometry = TriangularGeometry::with_data(vertices, indices);
+        let (vertices, normals, uvs, indices) = create_test_triangle();
+        let geometry = TriangularGeometry::with_data(vertices, normals, uvs, indices);
 
         mesh1.insert("material".to_string(), geometry.clone());
         mesh2.insert("material".to_string(), geometry);
@@ -399,8 +478,11 @@ mod tests {
 
         assert_eq!(triangular_mesh.len(), 1);
         let geometry = triangular_mesh.get("wood").unwrap();
-        assert_eq!(geometry.vertices.len(), 3);
-        assert_eq!(geometry.indices.len(), 3); // 1 triangle = 3 indices
+        assert_eq!(geometry.vertex_count(), 3);
+        assert_eq!(geometry.vertices.len(), 9);  // 3 vertices * 3 components
+        assert_eq!(geometry.normals.len(), 9);   // 3 normals * 3 components
+        assert_eq!(geometry.uvs.len(), 6);        // 3 uvs * 2 components
+        assert_eq!(geometry.indices.len(), 3);   // 1 triangle = 3 indices
     }
 
     #[test]
@@ -420,8 +502,9 @@ mod tests {
 
         assert_eq!(triangular_mesh.len(), 1);
         let geometry = triangular_mesh.get("floor").unwrap();
-        assert_eq!(geometry.vertices.len(), 4);
-        assert_eq!(geometry.indices.len(), 6); // 2 triangles = 6 indices
+        assert_eq!(geometry.vertex_count(), 4);
+        assert_eq!(geometry.vertices.len(), 12); // 4 vertices * 3 components
+        assert_eq!(geometry.indices.len(), 6);   // 2 triangles = 6 indices
 
         // Verify fan triangulation: (0,1,2) and (0,2,3)
         assert_eq!(geometry.indices[0], 0);
@@ -449,8 +532,9 @@ mod tests {
         let triangular_mesh = TriangularMesh::from_polygon_mesh(&polygon_mesh);
 
         let geometry = triangular_mesh.get("pentagon").unwrap();
-        assert_eq!(geometry.vertices.len(), 5);
-        assert_eq!(geometry.indices.len(), 9); // 3 triangles = 9 indices (n-2 triangles)
+        assert_eq!(geometry.vertex_count(), 5);
+        assert_eq!(geometry.vertices.len(), 15); // 5 vertices * 3 components
+        assert_eq!(geometry.indices.len(), 9);   // 3 triangles = 9 indices (n-2 triangles)
     }
 
     #[test]
@@ -479,11 +563,11 @@ mod tests {
         assert_eq!(triangular_mesh.len(), 2);
 
         let wood_geometry = triangular_mesh.get("wood").unwrap();
-        assert_eq!(wood_geometry.vertices.len(), 4);
+        assert_eq!(wood_geometry.vertex_count(), 4);
         assert_eq!(wood_geometry.indices.len(), 6);
 
         let metal_geometry = triangular_mesh.get("metal").unwrap();
-        assert_eq!(metal_geometry.vertices.len(), 4);
+        assert_eq!(metal_geometry.vertex_count(), 4);
         assert_eq!(metal_geometry.indices.len(), 6);
     }
 
@@ -509,7 +593,7 @@ mod tests {
         assert_eq!(triangular_mesh.len(), 1);
 
         let geometry = triangular_mesh.get("brick").unwrap();
-        assert_eq!(geometry.vertices.len(), 6);
+        assert_eq!(geometry.vertex_count(), 6);
         assert_eq!(geometry.indices.len(), 6); // 2 triangles = 6 indices
     }
 
@@ -561,12 +645,27 @@ mod tests {
         let triangular_mesh = TriangularMesh::from_polygon_mesh(&polygon_mesh);
         let geometry = triangular_mesh.get("test").unwrap();
 
-        // Verify vertex data is preserved (converted to f32)
-        assert_eq!(geometry.vertices[0].position, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(geometry.vertices[0].normal, Vec3::new(0.0, 0.0, 1.0));
-        assert_eq!(geometry.vertices[0].uv, Vec2::new(0.25, 0.75));
+        // Verify vertex data is preserved (converted to f32 flat arrays)
+        // Vertex 0: position (1, 2, 3)
+        assert_eq!(geometry.vertices[0], 1.0);
+        assert_eq!(geometry.vertices[1], 2.0);
+        assert_eq!(geometry.vertices[2], 3.0);
+        // Vertex 0: normal (0, 0, 1)
+        assert_eq!(geometry.normals[0], 0.0);
+        assert_eq!(geometry.normals[1], 0.0);
+        assert_eq!(geometry.normals[2], 1.0);
+        // Vertex 0: uv (0.25, 0.75)
+        assert_eq!(geometry.uvs[0], 0.25);
+        assert_eq!(geometry.uvs[1], 0.75);
 
-        assert_eq!(geometry.vertices[1].position, Vec3::new(4.0, 5.0, 6.0));
-        assert_eq!(geometry.vertices[2].position, Vec3::new(7.0, 8.0, 9.0));
+        // Vertex 1: position (4, 5, 6)
+        assert_eq!(geometry.vertices[3], 4.0);
+        assert_eq!(geometry.vertices[4], 5.0);
+        assert_eq!(geometry.vertices[5], 6.0);
+
+        // Vertex 2: position (7, 8, 9)
+        assert_eq!(geometry.vertices[6], 7.0);
+        assert_eq!(geometry.vertices[7], 8.0);
+        assert_eq!(geometry.vertices[8], 9.0);
     }
 }

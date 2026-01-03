@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use crate::geometry_error::GeometryError;
 use crate::polygon_mesh::PolygonMesh;
 use crate::triangular_mesh::TriangularMesh;
-use crate::vertex::{Vertex, VertexF32};
+use crate::vertex::Vertex;
 
 /// A trait for computing a SHA256 hash of geometry objects.
 ///
@@ -45,23 +45,6 @@ fn hash_vertex(hasher: &mut Sha256, vertex: &Vertex) {
     // Hash UV
     hasher.update(round_to_3_decimals(vertex.uv.x).to_le_bytes());
     hasher.update(round_to_3_decimals(vertex.uv.y).to_le_bytes());
-}
-
-/// Hashes VertexF32 data with 3 decimal place precision.
-fn hash_vertex_f32(hasher: &mut Sha256, vertex: &VertexF32) {
-    // Hash position
-    hasher.update(round_f32_to_3_decimals(vertex.position.x).to_le_bytes());
-    hasher.update(round_f32_to_3_decimals(vertex.position.y).to_le_bytes());
-    hasher.update(round_f32_to_3_decimals(vertex.position.z).to_le_bytes());
-
-    // Hash normal
-    hasher.update(round_f32_to_3_decimals(vertex.normal.x).to_le_bytes());
-    hasher.update(round_f32_to_3_decimals(vertex.normal.y).to_le_bytes());
-    hasher.update(round_f32_to_3_decimals(vertex.normal.z).to_le_bytes());
-
-    // Hash UV
-    hasher.update(round_f32_to_3_decimals(vertex.uv.x).to_le_bytes());
-    hasher.update(round_f32_to_3_decimals(vertex.uv.y).to_le_bytes());
 }
 
 impl GeometryHash for PolygonMesh {
@@ -139,12 +122,23 @@ impl GeometryHash for TriangularMesh {
             hasher.update(material_id.as_bytes());
             hasher.update([0u8]); // Null terminator for string
 
-            // Hash vertex count
-            hasher.update((geometry.vertices.len() as u64).to_le_bytes());
+            // Hash vertex count (number of vertices = vertices.len() / 3)
+            let vertex_count = geometry.vertices.len() / 3;
+            hasher.update((vertex_count as u64).to_le_bytes());
 
-            // Hash all vertices
-            for vertex in &geometry.vertices {
-                hash_vertex_f32(&mut hasher, vertex);
+            // Hash all vertex positions (with 3 decimal precision)
+            for &value in &geometry.vertices {
+                hasher.update(round_f32_to_3_decimals(value).to_le_bytes());
+            }
+
+            // Hash all normals (with 3 decimal precision)
+            for &value in &geometry.normals {
+                hasher.update(round_f32_to_3_decimals(value).to_le_bytes());
+            }
+
+            // Hash all UVs (with 3 decimal precision)
+            for &value in &geometry.uvs {
+                hasher.update(round_f32_to_3_decimals(value).to_le_bytes());
             }
 
             // Hash index count
@@ -166,21 +160,13 @@ mod tests {
     use super::*;
     use crate::polygon_mesh::Polygon;
     use crate::triangular_mesh::TriangularGeometry;
-    use glam::{DVec2, DVec3, Vec2, Vec3};
+    use glam::{DVec2, DVec3};
 
     fn create_test_vertex(x: f64, y: f64, z: f64) -> Vertex {
         Vertex::new(
             DVec3::new(x, y, z),
             DVec3::new(0.0, 1.0, 0.0),
             DVec2::new(0.0, 0.0),
-        )
-    }
-
-    fn create_test_vertex_f32(x: f32, y: f32, z: f32) -> VertexF32 {
-        VertexF32::new(
-            Vec3::new(x, y, z),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec2::new(0.0, 0.0),
         )
     }
 
@@ -316,11 +302,9 @@ mod tests {
     fn test_triangular_mesh_hash_deterministic() {
         let mut mesh = TriangularMesh::new();
         let geometry = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(0.0, 0.0, 0.0),
-                create_test_vertex_f32(1.0, 0.0, 0.0),
-                create_test_vertex_f32(0.5, 1.0, 0.0),
-            ],
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0], // 3 vertices
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0], // 3 normals
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],                 // 3 uvs
             vec![0, 1, 2],
         );
         mesh.insert("material".to_string(), geometry);
@@ -335,22 +319,18 @@ mod tests {
     fn test_triangular_mesh_hash_different_for_different_data() {
         let mut mesh1 = TriangularMesh::new();
         let geometry1 = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(0.0, 0.0, 0.0),
-                create_test_vertex_f32(1.0, 0.0, 0.0),
-                create_test_vertex_f32(0.5, 1.0, 0.0),
-            ],
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
         mesh1.insert("material".to_string(), geometry1);
 
         let mut mesh2 = TriangularMesh::new();
         let geometry2 = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(0.0, 0.0, 0.0),
-                create_test_vertex_f32(2.0, 0.0, 0.0), // Different position
-                create_test_vertex_f32(0.5, 1.0, 0.0),
-            ],
+            vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.5, 1.0, 0.0], // Different position (1.0 -> 2.0)
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
         mesh2.insert("material".to_string(), geometry2);
@@ -366,21 +346,17 @@ mod tests {
         let mut mesh = TriangularMesh::new();
 
         let geometry1 = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(0.0, 0.0, 0.0),
-                create_test_vertex_f32(1.0, 0.0, 0.0),
-                create_test_vertex_f32(0.5, 1.0, 0.0),
-            ],
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
         mesh.insert("material_a".to_string(), geometry1);
 
         let geometry2 = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(2.0, 0.0, 0.0),
-                create_test_vertex_f32(3.0, 0.0, 0.0),
-                create_test_vertex_f32(2.5, 1.0, 0.0),
-            ],
+            vec![2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 2.5, 1.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
         mesh.insert("material_b".to_string(), geometry2);
@@ -393,20 +369,16 @@ mod tests {
     fn test_triangular_mesh_hash_ordering_independent() {
         // Create two meshes with same geometries added in different order
         let geometry_a = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(0.0, 0.0, 0.0),
-                create_test_vertex_f32(1.0, 0.0, 0.0),
-                create_test_vertex_f32(0.5, 1.0, 0.0),
-            ],
+            vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
 
         let geometry_b = TriangularGeometry::with_data(
-            vec![
-                create_test_vertex_f32(2.0, 0.0, 0.0),
-                create_test_vertex_f32(3.0, 0.0, 0.0),
-                create_test_vertex_f32(2.5, 1.0, 0.0),
-            ],
+            vec![2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 2.5, 1.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0, 1, 2],
         );
 
@@ -429,22 +401,18 @@ mod tests {
     fn test_triangular_mesh_hash_precision_rounding() {
         let mut mesh1 = TriangularMesh::new();
         let geometry1 = TriangularGeometry::with_data(
-            vec![VertexF32::new(
-                Vec3::new(1.0001, 0.0, 0.0),
-                Vec3::Y,
-                Vec2::ZERO,
-            )],
+            vec![1.0001, 0.0, 0.0], // position
+            vec![0.0, 1.0, 0.0],     // normal
+            vec![0.0, 0.0],          // uv
             vec![0],
         );
         mesh1.insert("mat".to_string(), geometry1);
 
         let mut mesh2 = TriangularMesh::new();
         let geometry2 = TriangularGeometry::with_data(
-            vec![VertexF32::new(
-                Vec3::new(1.0004, 0.0, 0.0), // Rounds to same value
-                Vec3::Y,
-                Vec2::ZERO,
-            )],
+            vec![1.0004, 0.0, 0.0], // Rounds to same value
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0],
             vec![0],
         );
         mesh2.insert("mat".to_string(), geometry2);
