@@ -11,6 +11,11 @@ pub enum GeometryError {
         /// The actual number of vertices provided.
         provided: usize,
     },
+    /// The requested feature or operation is not yet implemented.
+    NotYetImplemented {
+        /// A description of the feature that is not yet implemented.
+        feature: String,
+    },
 }
 
 impl fmt::Display for GeometryError {
@@ -22,6 +27,9 @@ impl fmt::Display for GeometryError {
                     "Insufficient vertices: required at least {}, but only {} provided",
                     required, provided
                 )
+            }
+            GeometryError::NotYetImplemented { feature } => {
+                write!(f, "Not yet implemented: {}", feature)
             }
         }
     }
@@ -94,5 +102,50 @@ mod tests {
         });
         // Verify it implements Error trait by using it as a trait object
         assert!(!error.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_not_yet_implemented_error_display() {
+        let error = GeometryError::NotYetImplemented {
+            feature: "advanced tessellation".to_string(),
+        };
+        let message = format!("{}", error);
+        assert!(message.contains("Not yet implemented"));
+        assert!(message.contains("advanced tessellation"));
+    }
+
+    #[test]
+    fn test_not_yet_implemented_error_debug() {
+        let error = GeometryError::NotYetImplemented {
+            feature: "CSG operations".to_string(),
+        };
+        let debug_str = format!("{:?}", error);
+        assert!(debug_str.contains("NotYetImplemented"));
+        assert!(debug_str.contains("feature"));
+    }
+
+    #[test]
+    fn test_not_yet_implemented_error_equality() {
+        let error1 = GeometryError::NotYetImplemented {
+            feature: "feature_a".to_string(),
+        };
+        let error2 = GeometryError::NotYetImplemented {
+            feature: "feature_a".to_string(),
+        };
+        let error3 = GeometryError::NotYetImplemented {
+            feature: "feature_b".to_string(),
+        };
+
+        assert_eq!(error1, error2);
+        assert_ne!(error1, error3);
+    }
+
+    #[test]
+    fn test_not_yet_implemented_error_clone() {
+        let error = GeometryError::NotYetImplemented {
+            feature: "some feature".to_string(),
+        };
+        let cloned = error.clone();
+        assert_eq!(error, cloned);
     }
 }

@@ -1,5 +1,6 @@
 pub mod c_api;
 pub mod geometry_error;
+pub mod geometry_hash;
 pub mod geometry_model;
 pub mod plane;
 pub mod platonic_solid;

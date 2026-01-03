@@ -934,5 +934,236 @@ mod tests {
             );
         }
     }
+
+    // GeometryHash tests for Platonic solids
+
+    mod hash_tests {
+        use super::*;
+        use crate::geometry_hash::GeometryHash;
+
+        #[test]
+        fn test_tetrahedron_polygon_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Tetrahedron PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_hexahedron_polygon_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Hexahedron PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_octahedron_polygon_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Octahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Octahedron PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_dodecahedron_polygon_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Dodecahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Dodecahedron PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_icosahedron_polygon_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Icosahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Icosahedron PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_tetrahedron_triangular_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Tetrahedron TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_hexahedron_triangular_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Hexahedron TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_octahedron_triangular_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Octahedron);
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Octahedron TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_dodecahedron_triangular_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Dodecahedron);
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Dodecahedron TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_icosahedron_triangular_mesh_hash() {
+            let model = Model::with_default_material(PlatonicSolid::Icosahedron);
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Icosahedron TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_all_platonic_solids_have_unique_polygon_mesh_hashes() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            let hashes: Vec<String> = solids
+                .iter()
+                .map(|solid| {
+                    let model = Model::with_default_material(*solid);
+                    model.to_polygon_mesh().unwrap().geometry_hash().unwrap()
+                })
+                .collect();
+
+            // Verify all hashes are unique
+            for i in 0..hashes.len() {
+                for j in (i + 1)..hashes.len() {
+                    assert_ne!(
+                        hashes[i], hashes[j],
+                        "Hash collision between {:?} and {:?}",
+                        solids[i], solids[j]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_all_platonic_solids_have_unique_triangular_mesh_hashes() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            let hashes: Vec<String> = solids
+                .iter()
+                .map(|solid| {
+                    let model = Model::with_default_material(*solid);
+                    model.to_triangular_mesh().unwrap().geometry_hash().unwrap()
+                })
+                .collect();
+
+            // Verify all hashes are unique
+            for i in 0..hashes.len() {
+                for j in (i + 1)..hashes.len() {
+                    assert_ne!(
+                        hashes[i], hashes[j],
+                        "Hash collision between {:?} and {:?}",
+                        solids[i], solids[j]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_polygon_mesh_hash_is_deterministic_for_all_solids() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            for solid in solids {
+                let model = Model::with_default_material(solid);
+                let mesh1 = model.to_polygon_mesh().unwrap();
+                let mesh2 = model.to_polygon_mesh().unwrap();
+
+                let hash1 = mesh1.geometry_hash().unwrap();
+                let hash2 = mesh2.geometry_hash().unwrap();
+
+                assert_eq!(hash1, hash2, "Hash not deterministic for {:?}", solid);
+            }
+        }
+
+        #[test]
+        fn test_triangular_mesh_hash_is_deterministic_for_all_solids() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            for solid in solids {
+                let model = Model::with_default_material(solid);
+                let mesh1 = model.to_triangular_mesh().unwrap();
+                let mesh2 = model.to_triangular_mesh().unwrap();
+
+                let hash1 = mesh1.geometry_hash().unwrap();
+                let hash2 = mesh2.geometry_hash().unwrap();
+
+                assert_eq!(hash1, hash2, "Hash not deterministic for {:?}", solid);
+            }
+        }
+    }
 }
 
