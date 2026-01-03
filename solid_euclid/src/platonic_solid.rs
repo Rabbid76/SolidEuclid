@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use glam::{DVec2, DVec3};
+use serde::{Deserialize, Serialize};
 
 use crate::geometry_error::GeometryError;
 use crate::geometry_model::GeometryModel;
@@ -9,7 +10,7 @@ use crate::vertex::Vertex;
 
 /// Represents the five Platonic solids - convex regular polyhedra with equivalent faces
 /// composed of congruent convex regular polygons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatonicSolid {
     /// 4 triangular faces
     Tetrahedron,
@@ -24,7 +25,7 @@ pub enum PlatonicSolid {
 }
 
 /// Represents material assignment strategies for geometry faces.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Material {
     /// Default material with no specific assignment
     Default,
@@ -40,7 +41,7 @@ pub enum Material {
 }
 
 /// A model combining a Platonic solid geometry with material assignment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Model {
     pub geometry: PlatonicSolid,
     pub material: Material,
@@ -1163,6 +1164,171 @@ mod tests {
 
                 assert_eq!(hash1, hash2, "Hash not deterministic for {:?}", solid);
             }
+        }
+    }
+
+    mod serde_tests {
+        use super::*;
+
+        #[test]
+        fn test_platonic_solid_serialize_deserialize() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            for solid in solids {
+                let json = serde_json::to_string(&solid).unwrap();
+                let deserialized: PlatonicSolid = serde_json::from_str(&json).unwrap();
+                assert_eq!(solid, deserialized);
+            }
+        }
+
+        #[test]
+        fn test_material_default_serialize_deserialize() {
+            let material = Material::Default;
+            let json = serde_json::to_string(&material).unwrap();
+            let deserialized: Material = serde_json::from_str(&json).unwrap();
+            assert_eq!(material, deserialized);
+        }
+
+        #[test]
+        fn test_material_uniform_serialize_deserialize() {
+            let material = Material::Uniform("gold".to_string());
+            let json = serde_json::to_string(&material).unwrap();
+            let deserialized: Material = serde_json::from_str(&json).unwrap();
+            assert_eq!(material, deserialized);
+        }
+
+        #[test]
+        fn test_material_map_serialize_deserialize() {
+            let mut face_map = HashMap::new();
+            face_map.insert(0, "red".to_string());
+            face_map.insert(1, "blue".to_string());
+            face_map.insert(5, "green".to_string());
+
+            let material = Material::Map {
+                default: "gray".to_string(),
+                face_map,
+            };
+
+            let json = serde_json::to_string(&material).unwrap();
+            let deserialized: Material = serde_json::from_str(&json).unwrap();
+            assert_eq!(material, deserialized);
+        }
+
+        #[test]
+        fn test_material_array_serialize_deserialize() {
+            let materials = vec![
+                "mat0".to_string(),
+                "mat1".to_string(),
+                "mat2".to_string(),
+                "mat3".to_string(),
+            ];
+
+            let material = Material::Array(materials);
+            let json = serde_json::to_string(&material).unwrap();
+            let deserialized: Material = serde_json::from_str(&json).unwrap();
+            assert_eq!(material, deserialized);
+        }
+
+        #[test]
+        fn test_model_with_default_material_serialize_deserialize() {
+            let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+            let json = serde_json::to_string(&model).unwrap();
+            let deserialized: Model = serde_json::from_str(&json).unwrap();
+            assert_eq!(model, deserialized);
+        }
+
+        #[test]
+        fn test_model_with_uniform_material_serialize_deserialize() {
+            let model = Model::with_uniform_material(PlatonicSolid::Hexahedron, "wood".to_string());
+            let json = serde_json::to_string(&model).unwrap();
+            let deserialized: Model = serde_json::from_str(&json).unwrap();
+            assert_eq!(model, deserialized);
+        }
+
+        #[test]
+        fn test_model_with_map_material_serialize_deserialize() {
+            let mut face_map = HashMap::new();
+            face_map.insert(0, "front".to_string());
+            face_map.insert(1, "back".to_string());
+
+            let material = Material::Map {
+                default: "default".to_string(),
+                face_map,
+            };
+
+            let model = Model::new(PlatonicSolid::Dodecahedron, material);
+            let json = serde_json::to_string(&model).unwrap();
+            let deserialized: Model = serde_json::from_str(&json).unwrap();
+            assert_eq!(model, deserialized);
+        }
+
+        #[test]
+        fn test_model_with_array_material_serialize_deserialize() {
+            let materials = vec![
+                "mat0".to_string(),
+                "mat1".to_string(),
+                "mat2".to_string(),
+                "mat3".to_string(),
+                "mat4".to_string(),
+                "mat5".to_string(),
+            ];
+
+            let model = Model::new(PlatonicSolid::Hexahedron, Material::Array(materials));
+            let json = serde_json::to_string(&model).unwrap();
+            let deserialized: Model = serde_json::from_str(&json).unwrap();
+            assert_eq!(model, deserialized);
+        }
+
+        #[test]
+        fn test_all_platonic_solids_model_serialize_deserialize() {
+            let solids = [
+                PlatonicSolid::Tetrahedron,
+                PlatonicSolid::Hexahedron,
+                PlatonicSolid::Octahedron,
+                PlatonicSolid::Dodecahedron,
+                PlatonicSolid::Icosahedron,
+            ];
+
+            for solid in solids {
+                let model = Model::with_default_material(solid);
+                let json = serde_json::to_string(&model).unwrap();
+                let deserialized: Model = serde_json::from_str(&json).unwrap();
+                assert_eq!(model, deserialized, "Failed for {:?}", solid);
+            }
+        }
+
+        #[test]
+        fn test_model_json_structure() {
+            let model = Model::with_uniform_material(PlatonicSolid::Icosahedron, "silver".to_string());
+            let json = serde_json::to_string_pretty(&model).unwrap();
+
+            // Verify the JSON contains expected fields
+            assert!(json.contains("geometry"));
+            assert!(json.contains("material"));
+            assert!(json.contains("Icosahedron"));
+            assert!(json.contains("silver"));
+        }
+
+        #[test]
+        fn test_deserialize_from_json_string() {
+            let json = r#"{"geometry":"Tetrahedron","material":"Default"}"#;
+            let model: Model = serde_json::from_str(json).unwrap();
+            assert_eq!(model.geometry, PlatonicSolid::Tetrahedron);
+            assert_eq!(model.material, Material::Default);
+        }
+
+        #[test]
+        fn test_deserialize_uniform_material_from_json_string() {
+            let json = r#"{"geometry":"Hexahedron","material":{"Uniform":"bronze"}}"#;
+            let model: Model = serde_json::from_str(json).unwrap();
+            assert_eq!(model.geometry, PlatonicSolid::Hexahedron);
+            assert_eq!(model.material, Material::Uniform("bronze".to_string()));
         }
     }
 }
