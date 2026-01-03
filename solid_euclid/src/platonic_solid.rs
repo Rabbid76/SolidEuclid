@@ -1,5 +1,12 @@
 use std::collections::HashMap;
 
+use glam::{DVec2, DVec3};
+
+use crate::geometry_error::GeometryError;
+use crate::geometry_model::GeometryModel;
+use crate::polygon_mesh::{Polygon, PolygonMesh};
+use crate::vertex::Vertex;
+
 /// Represents the five Platonic solids - convex regular polyhedra with equivalent faces
 /// composed of congruent convex regular polygons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +66,377 @@ impl Model {
             geometry,
             material: Material::Uniform(material),
         }
+    }
+
+    /// Gets the material name for a face index based on the material assignment.
+    fn get_material_for_face(&self, face_index: i32, _total_faces: i32) -> String {
+        match &self.material {
+            Material::Default => format!("material_{}", face_index),
+            Material::Uniform(name) => name.clone(),
+            Material::Map { default, face_map } => face_map
+                .get(&face_index)
+                .cloned()
+                .unwrap_or_else(|| default.clone()),
+            Material::Array(arr) => {
+                if (face_index as usize) < arr.len() {
+                    arr[face_index as usize].clone()
+                } else {
+                    format!("material_{}", face_index)
+                }
+            }
+        }
+    }
+
+    /// Sets up materials in the polygon mesh based on the material assignment.
+    fn setup_materials(&self, mesh: &mut PolygonMesh, total_faces: i32) {
+        for face_index in 0..total_faces {
+            let material_name = self.get_material_for_face(face_index, total_faces);
+            mesh.set_material(face_index, material_name);
+        }
+    }
+}
+
+impl GeometryModel for Model {
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        match self.geometry {
+            PlatonicSolid::Tetrahedron => self.create_tetrahedron(),
+            PlatonicSolid::Hexahedron => self.create_hexahedron(),
+            PlatonicSolid::Octahedron => self.create_octahedron(),
+            PlatonicSolid::Dodecahedron => self.create_dodecahedron(),
+            PlatonicSolid::Icosahedron => self.create_icosahedron(),
+        }
+    }
+}
+
+impl Model {
+    /// Creates a tetrahedron polygon mesh.
+    /// 4 vertices, 4 triangular faces.
+    fn create_tetrahedron(&self) -> Result<PolygonMesh, GeometryError> {
+        let mut mesh = PolygonMesh::new();
+
+        // Tetrahedron vertices
+        let s_8_9: f64 = (8.0_f64 / 9.0).sqrt();
+        let s_2_9: f64 = (2.0_f64 / 9.0).sqrt();
+        let s_2_3: f64 = (2.0_f64 / 3.0).sqrt();
+        let s_1_3: f64 = 1.0 / 3.0;
+
+        let vertices = [
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(s_8_9, 0.0, -s_1_3),
+            DVec3::new(-s_2_9, s_2_3, -s_1_3),
+            DVec3::new(-s_2_9, -s_2_3, -s_1_3),
+        ];
+
+        // Face indices and opposite vertex for normal calculation
+        let faces = [
+            ([0, 1, 2], 3), // Face 0: opposite to vertex 3
+            ([0, 2, 3], 1), // Face 1: opposite to vertex 1
+            ([0, 3, 1], 2), // Face 2: opposite to vertex 2
+            ([1, 3, 2], 0), // Face 3: opposite to vertex 0
+        ];
+
+        // UV coordinates for triangular faces
+        let uvs = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+
+        for (face_index, (face_indices, opposite_vertex)) in faces.iter().enumerate() {
+            // Calculate face normal (pointing away from opposite vertex)
+            let normal = -vertices[*opposite_vertex].normalize();
+
+            // Add vertices for this face
+            let mut polygon_indices = Vec::new();
+            for (i, &vi) in face_indices.iter().enumerate() {
+                let vertex = Vertex::new(vertices[vi], normal, uvs[i]);
+                let idx = mesh.add_vertex(vertex);
+                polygon_indices.push(idx);
+            }
+
+            mesh.add_polygon(Polygon::new(polygon_indices, normal, face_index as i32));
+        }
+
+        self.setup_materials(&mut mesh, 4);
+        Ok(mesh)
+    }
+
+    /// Creates a hexahedron (cube) polygon mesh.
+    /// 8 vertices, 6 square faces.
+    fn create_hexahedron(&self) -> Result<PolygonMesh, GeometryError> {
+        let mut mesh = PolygonMesh::new();
+
+        // Cube vertices (normalized to unit sphere)
+        let l = 1.0 / 3.0_f64.sqrt();
+        let vertices = [
+            DVec3::new(-l, -l, l),  // 0
+            DVec3::new(l, -l, l),   // 1
+            DVec3::new(l, l, l),    // 2
+            DVec3::new(-l, l, l),   // 3
+            DVec3::new(-l, -l, -l), // 4
+            DVec3::new(l, -l, -l),  // 5
+            DVec3::new(l, l, -l),   // 6
+            DVec3::new(-l, l, -l),  // 7
+        ];
+
+        // Face indices and normals
+        let faces = [
+            ([0, 1, 2, 3], DVec3::new(0.0, 0.0, 1.0)),  // Front
+            ([1, 5, 6, 2], DVec3::new(1.0, 0.0, 0.0)),  // Right
+            ([5, 4, 7, 6], DVec3::new(0.0, 0.0, -1.0)), // Back
+            ([4, 0, 3, 7], DVec3::new(-1.0, 0.0, 0.0)), // Left
+            ([3, 2, 6, 7], DVec3::new(0.0, 1.0, 0.0)),  // Top
+            ([1, 0, 4, 5], DVec3::new(0.0, -1.0, 0.0)), // Bottom
+        ];
+
+        // UV coordinates for quad faces
+        let uvs = [
+            DVec2::new(0.0, 1.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 0.0),
+        ];
+
+        for (face_index, (face_indices, normal)) in faces.iter().enumerate() {
+            let mut polygon_indices = Vec::new();
+            for (i, &vi) in face_indices.iter().enumerate() {
+                let vertex = Vertex::new(vertices[vi], *normal, uvs[i]);
+                let idx = mesh.add_vertex(vertex);
+                polygon_indices.push(idx);
+            }
+
+            mesh.add_polygon(Polygon::new(polygon_indices, *normal, face_index as i32));
+        }
+
+        self.setup_materials(&mut mesh, 6);
+        Ok(mesh)
+    }
+
+    /// Creates an octahedron polygon mesh.
+    /// 6 vertices, 8 triangular faces.
+    fn create_octahedron(&self) -> Result<PolygonMesh, GeometryError> {
+        let mut mesh = PolygonMesh::new();
+
+        // Octahedron vertices
+        let vertices = [
+            DVec3::new(-1.0, 0.0, 0.0), // 0
+            DVec3::new(0.0, -1.0, 0.0), // 1
+            DVec3::new(0.0, 0.0, -1.0), // 2
+            DVec3::new(1.0, 0.0, 0.0),  // 3
+            DVec3::new(0.0, 1.0, 0.0),  // 4
+            DVec3::new(0.0, 0.0, 1.0),  // 5
+        ];
+
+        // Face indices - 8 triangular faces
+        let faces = [
+            [0, 2, 1], // 0
+            [1, 2, 3], // 1
+            [3, 2, 4], // 2
+            [4, 2, 0], // 3
+            [0, 1, 5], // 4
+            [1, 3, 5], // 5
+            [3, 4, 5], // 6
+            [4, 0, 5], // 7
+        ];
+
+        // Face normal factors
+        let normal_factors = [
+            DVec3::new(-1.0, -1.0, -1.0),
+            DVec3::new(1.0, -1.0, -1.0),
+            DVec3::new(1.0, 1.0, -1.0),
+            DVec3::new(-1.0, 1.0, -1.0),
+            DVec3::new(-1.0, -1.0, 1.0),
+            DVec3::new(1.0, -1.0, 1.0),
+            DVec3::new(1.0, 1.0, 1.0),
+            DVec3::new(-1.0, 1.0, 1.0),
+        ];
+
+        // UV coordinates for triangular faces
+        let uvs = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 0.5),
+        ];
+
+        for (face_index, face_indices) in faces.iter().enumerate() {
+            let normal = normal_factors[face_index].normalize();
+
+            let mut polygon_indices = Vec::new();
+            for (i, &vi) in face_indices.iter().enumerate() {
+                let vertex = Vertex::new(vertices[vi], normal, uvs[i]);
+                let idx = mesh.add_vertex(vertex);
+                polygon_indices.push(idx);
+            }
+
+            mesh.add_polygon(Polygon::new(polygon_indices, normal, face_index as i32));
+        }
+
+        self.setup_materials(&mut mesh, 8);
+        Ok(mesh)
+    }
+
+    /// Creates a dodecahedron polygon mesh.
+    /// 20 vertices, 12 pentagonal faces.
+    fn create_dodecahedron(&self) -> Result<PolygonMesh, GeometryError> {
+        let mut mesh = PolygonMesh::new();
+
+        // Golden ratio
+        let phi: f64 = (1.0 + 5.0_f64.sqrt()) / 2.0;
+        let phi2 = phi * phi;
+        let a = 1.0;
+        let b = 1.0 / phi;
+        let c = 1.0 / phi2;
+
+        // Dodecahedron vertices
+        let vertices = [
+            // Vertices 0-7: (+/-b, +/-b, +/-b) - cube vertices scaled by 1/phi
+            DVec3::new(-b, -b, -b), // 0
+            DVec3::new(b, -b, -b),  // 1
+            DVec3::new(b, b, -b),   // 2
+            DVec3::new(-b, b, -b),  // 3
+            DVec3::new(-b, -b, b),  // 4
+            DVec3::new(b, -b, b),   // 5
+            DVec3::new(b, b, b),    // 6
+            DVec3::new(-b, b, b),   // 7
+            // Vertices 8-11: (0, +/-a, +/-c)
+            DVec3::new(0.0, -a, -c), // 8
+            DVec3::new(0.0, a, -c),  // 9
+            DVec3::new(0.0, a, c),   // 10
+            DVec3::new(0.0, -a, c),  // 11
+            // Vertices 12-15: (+/-a, +/-c, 0)
+            DVec3::new(-a, -c, 0.0), // 12
+            DVec3::new(a, -c, 0.0),  // 13
+            DVec3::new(a, c, 0.0),   // 14
+            DVec3::new(-a, c, 0.0),  // 15
+            // Vertices 16-19: (+/-c, 0, +/-a)
+            DVec3::new(-c, 0.0, -a), // 16
+            DVec3::new(c, 0.0, -a),  // 17
+            DVec3::new(c, 0.0, a),   // 18
+            DVec3::new(-c, 0.0, a),  // 19
+        ];
+
+        // 12 pentagonal faces
+        let faces = [
+            [16, 17, 1, 8, 0],
+            [17, 16, 3, 9, 2],
+            [19, 18, 6, 10, 7],
+            [18, 19, 4, 11, 5],
+            [14, 13, 1, 17, 2],
+            [13, 14, 6, 18, 5],
+            [15, 12, 4, 19, 7],
+            [12, 15, 3, 16, 0],
+            [9, 10, 6, 14, 2],
+            [10, 9, 3, 15, 7],
+            [8, 11, 4, 12, 0],
+            [11, 8, 1, 13, 5],
+        ];
+
+        // UV coordinates for pentagonal faces (arranged in a pentagon pattern)
+        let uvs = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 0.5),
+            DVec2::new(0.5, 1.0),
+            DVec2::new(0.0, 0.5),
+        ];
+
+        for (face_index, face_indices) in faces.iter().enumerate() {
+            // Calculate face normal from centroid
+            let mut centroid = DVec3::ZERO;
+            for &vi in face_indices {
+                centroid += vertices[vi];
+            }
+            let normal = centroid.normalize();
+
+            let mut polygon_indices = Vec::new();
+            for (i, &vi) in face_indices.iter().enumerate() {
+                let vertex = Vertex::new(vertices[vi], normal, uvs[i]);
+                let idx = mesh.add_vertex(vertex);
+                polygon_indices.push(idx);
+            }
+
+            mesh.add_polygon(Polygon::new(polygon_indices, normal, face_index as i32));
+        }
+
+        self.setup_materials(&mut mesh, 12);
+        Ok(mesh)
+    }
+
+    /// Creates an icosahedron polygon mesh.
+    /// 12 vertices, 20 triangular faces.
+    fn create_icosahedron(&self) -> Result<PolygonMesh, GeometryError> {
+        let mut mesh = PolygonMesh::new();
+
+        // Golden ratio (unused but kept for documentation)
+        let _phi: f64 = (1.0 + 5.0_f64.sqrt()) / 2.0;
+
+        // Icosahedron vertices (normalized)
+        let vertices = [
+            DVec3::new(0.0, 0.0, 1.0).normalize(),
+            DVec3::new(0.894, 0.0, 0.447).normalize(),
+            DVec3::new(0.276, 0.851, 0.447).normalize(),
+            DVec3::new(-0.724, 0.526, 0.447).normalize(),
+            DVec3::new(-0.724, -0.526, 0.447).normalize(),
+            DVec3::new(0.276, -0.851, 0.447).normalize(),
+            DVec3::new(0.724, 0.526, -0.447).normalize(),
+            DVec3::new(-0.276, 0.851, -0.447).normalize(),
+            DVec3::new(-0.894, 0.0, -0.447).normalize(),
+            DVec3::new(-0.276, -0.851, -0.447).normalize(),
+            DVec3::new(0.724, -0.526, -0.447).normalize(),
+            DVec3::new(0.0, 0.0, -1.0).normalize(),
+        ];
+
+        // 20 triangular faces
+        let faces = [
+            [1, 2, 0],
+            [2, 3, 0],
+            [3, 4, 0],
+            [4, 5, 0],
+            [5, 1, 0],
+            [7, 6, 11],
+            [8, 7, 11],
+            [9, 8, 11],
+            [10, 9, 11],
+            [6, 10, 11],
+            [1, 6, 2],
+            [2, 7, 3],
+            [3, 8, 4],
+            [4, 9, 5],
+            [5, 10, 1],
+            [7, 2, 6],
+            [8, 3, 7],
+            [9, 4, 8],
+            [10, 5, 9],
+            [6, 1, 10],
+        ];
+
+        // UV coordinates for triangular faces
+        let uvs = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+
+        for (face_index, face_indices) in faces.iter().enumerate() {
+            // Calculate face normal from centroid
+            let mut centroid = DVec3::ZERO;
+            for &vi in face_indices {
+                centroid += vertices[vi];
+            }
+            let normal = centroid.normalize();
+
+            let mut polygon_indices = Vec::new();
+            for (i, &vi) in face_indices.iter().enumerate() {
+                let vertex = Vertex::new(vertices[vi], normal, uvs[i]);
+                let idx = mesh.add_vertex(vertex);
+                polygon_indices.push(idx);
+            }
+
+            mesh.add_polygon(Polygon::new(polygon_indices, normal, face_index as i32));
+        }
+
+        self.setup_materials(&mut mesh, 20);
+        Ok(mesh)
     }
 }
 
@@ -245,4 +623,316 @@ mod tests {
         assert!(debug_str.contains("Icosahedron"));
         assert!(debug_str.contains("Default"));
     }
+
+    // GeometryModel trait implementation tests
+
+    #[test]
+    fn test_tetrahedron_to_polygon_mesh() {
+        let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Tetrahedron has 4 faces, each with 3 vertices
+        assert_eq!(mesh.polygons.len(), 4);
+        assert_eq!(mesh.vertices.len(), 12); // 4 faces * 3 vertices
+
+        // Each polygon should be a triangle
+        for polygon in &mesh.polygons {
+            assert_eq!(polygon.indices.len(), 3);
+        }
+
+        // Check materials are set
+        assert_eq!(mesh.material_map.len(), 4);
+    }
+
+    #[test]
+    fn test_hexahedron_to_polygon_mesh() {
+        let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Hexahedron has 6 faces, each with 4 vertices
+        assert_eq!(mesh.polygons.len(), 6);
+        assert_eq!(mesh.vertices.len(), 24); // 6 faces * 4 vertices
+
+        // Each polygon should be a quad
+        for polygon in &mesh.polygons {
+            assert_eq!(polygon.indices.len(), 4);
+        }
+
+        // Check materials are set
+        assert_eq!(mesh.material_map.len(), 6);
+    }
+
+    #[test]
+    fn test_octahedron_to_polygon_mesh() {
+        let model = Model::with_default_material(PlatonicSolid::Octahedron);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Octahedron has 8 faces, each with 3 vertices
+        assert_eq!(mesh.polygons.len(), 8);
+        assert_eq!(mesh.vertices.len(), 24); // 8 faces * 3 vertices
+
+        // Each polygon should be a triangle
+        for polygon in &mesh.polygons {
+            assert_eq!(polygon.indices.len(), 3);
+        }
+
+        // Check materials are set
+        assert_eq!(mesh.material_map.len(), 8);
+    }
+
+    #[test]
+    fn test_dodecahedron_to_polygon_mesh() {
+        let model = Model::with_default_material(PlatonicSolid::Dodecahedron);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Dodecahedron has 12 faces, each with 5 vertices (pentagons)
+        assert_eq!(mesh.polygons.len(), 12);
+        assert_eq!(mesh.vertices.len(), 60); // 12 faces * 5 vertices
+
+        // Each polygon should be a pentagon
+        for polygon in &mesh.polygons {
+            assert_eq!(polygon.indices.len(), 5);
+        }
+
+        // Check materials are set
+        assert_eq!(mesh.material_map.len(), 12);
+    }
+
+    #[test]
+    fn test_icosahedron_to_polygon_mesh() {
+        let model = Model::with_default_material(PlatonicSolid::Icosahedron);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Icosahedron has 20 faces, each with 3 vertices
+        assert_eq!(mesh.polygons.len(), 20);
+        assert_eq!(mesh.vertices.len(), 60); // 20 faces * 3 vertices
+
+        // Each polygon should be a triangle
+        for polygon in &mesh.polygons {
+            assert_eq!(polygon.indices.len(), 3);
+        }
+
+        // Check materials are set
+        assert_eq!(mesh.material_map.len(), 20);
+    }
+
+    #[test]
+    fn test_to_triangular_mesh_tetrahedron() {
+        let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+        let result = model.to_triangular_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Tetrahedron has 4 triangular faces, so 4 materials
+        assert_eq!(mesh.len(), 4);
+
+        // Each geometry should have 3 vertices (one triangle per face)
+        for (_, geometry) in &mesh.geometries {
+            assert_eq!(geometry.vertices.len(), 3);
+            assert_eq!(geometry.indices.len(), 3);
+        }
+    }
+
+    #[test]
+    fn test_to_triangular_mesh_hexahedron() {
+        let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+        let result = model.to_triangular_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Hexahedron has 6 quad faces -> 6 materials
+        assert_eq!(mesh.len(), 6);
+
+        // Each quad becomes 2 triangles
+        for (_, geometry) in &mesh.geometries {
+            assert_eq!(geometry.vertices.len(), 4);
+            assert_eq!(geometry.indices.len(), 6); // 2 triangles * 3 indices
+        }
+    }
+
+    #[test]
+    fn test_to_triangular_mesh_dodecahedron() {
+        let model = Model::with_default_material(PlatonicSolid::Dodecahedron);
+        let result = model.to_triangular_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // Dodecahedron has 12 pentagonal faces -> 12 materials
+        assert_eq!(mesh.len(), 12);
+
+        // Each pentagon becomes 3 triangles (n-2 triangles for n-gon)
+        for (_, geometry) in &mesh.geometries {
+            assert_eq!(geometry.vertices.len(), 5);
+            assert_eq!(geometry.indices.len(), 9); // 3 triangles * 3 indices
+        }
+    }
+
+    #[test]
+    fn test_uniform_material() {
+        let model = Model::with_uniform_material(PlatonicSolid::Tetrahedron, "gold".to_string());
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        // All faces should have the same material
+        for face_id in 0..4 {
+            assert_eq!(mesh.get_material(face_id), Some(&"gold".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_map_material() {
+        let mut face_map = HashMap::new();
+        face_map.insert(0, "red".to_string());
+        face_map.insert(2, "blue".to_string());
+
+        let material = Material::Map {
+            default: "gray".to_string(),
+            face_map,
+        };
+
+        let model = Model::new(PlatonicSolid::Tetrahedron, material);
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        assert_eq!(mesh.get_material(0), Some(&"red".to_string()));
+        assert_eq!(mesh.get_material(1), Some(&"gray".to_string()));
+        assert_eq!(mesh.get_material(2), Some(&"blue".to_string()));
+        assert_eq!(mesh.get_material(3), Some(&"gray".to_string()));
+    }
+
+    #[test]
+    fn test_array_material() {
+        let materials = vec![
+            "mat0".to_string(),
+            "mat1".to_string(),
+            "mat2".to_string(),
+            "mat3".to_string(),
+        ];
+
+        let model = Model::new(PlatonicSolid::Tetrahedron, Material::Array(materials));
+        let result = model.to_polygon_mesh();
+
+        assert!(result.is_ok());
+        let mesh = result.unwrap();
+
+        assert_eq!(mesh.get_material(0), Some(&"mat0".to_string()));
+        assert_eq!(mesh.get_material(1), Some(&"mat1".to_string()));
+        assert_eq!(mesh.get_material(2), Some(&"mat2".to_string()));
+        assert_eq!(mesh.get_material(3), Some(&"mat3".to_string()));
+    }
+
+    #[test]
+    fn test_vertex_positions_tetrahedron() {
+        let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+        let mesh = model.to_polygon_mesh().unwrap();
+
+        // All vertices should be on a unit sphere (approximately)
+        for vertex in &mesh.vertices {
+            let length = vertex.position.length();
+            assert!((length - 1.0).abs() < 0.01, "Vertex not on unit sphere: {}", length);
+        }
+    }
+
+    #[test]
+    fn test_vertex_positions_hexahedron() {
+        let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+        let mesh = model.to_polygon_mesh().unwrap();
+
+        // All vertices should be at the same distance from origin
+        let expected_length = 1.0 / 3.0_f64.sqrt() * 3.0_f64.sqrt();
+        for vertex in &mesh.vertices {
+            let length = vertex.position.length();
+            assert!((length - expected_length).abs() < 0.01, "Unexpected vertex distance: {}", length);
+        }
+    }
+
+    #[test]
+    fn test_vertex_normals_are_normalized() {
+        let solids = [
+            PlatonicSolid::Tetrahedron,
+            PlatonicSolid::Hexahedron,
+            PlatonicSolid::Octahedron,
+            PlatonicSolid::Dodecahedron,
+            PlatonicSolid::Icosahedron,
+        ];
+
+        for solid in solids {
+            let model = Model::with_default_material(solid);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            for vertex in &mesh.vertices {
+                let length = vertex.normal.length();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized for {:?}: {}",
+                    solid,
+                    length
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_polygon_normals_are_normalized() {
+        let solids = [
+            PlatonicSolid::Tetrahedron,
+            PlatonicSolid::Hexahedron,
+            PlatonicSolid::Octahedron,
+            PlatonicSolid::Dodecahedron,
+            PlatonicSolid::Icosahedron,
+        ];
+
+        for solid in solids {
+            let model = Model::with_default_material(solid);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            for polygon in &mesh.polygons {
+                let length = polygon.normal.length();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Polygon normal not normalized for {:?}: {}",
+                    solid,
+                    length
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_icosahedron_vertices_on_unit_sphere() {
+        let model = Model::with_default_material(PlatonicSolid::Icosahedron);
+        let mesh = model.to_polygon_mesh().unwrap();
+
+        for vertex in &mesh.vertices {
+            let length = vertex.position.length();
+            assert!(
+                (length - 1.0).abs() < 0.01,
+                "Icosahedron vertex not on unit sphere: {}",
+                length
+            );
+        }
+    }
 }
+
