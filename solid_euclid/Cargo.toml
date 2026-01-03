@@ -9,6 +9,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 glam = "0.30"
 hex = "0.4"
+js-sys = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 wasm-bindgen = "0.2"
