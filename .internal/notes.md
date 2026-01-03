@@ -334,3 +334,132 @@ emcc main.cpp \
 #### When should you NOT do this?
 
 If your goal is just to call Rust from a web page that *also* has C++, it is often easier to compile them as **two separate Wasm modules** and let them communicate via JavaScript. You should only use the "linking" method above if the C++ and Rust code need to share the same memory space or call each other thousands of times per second (low-latency interop).
+
+### Rust Wasm JSON Communication
+
+>I have a WebAssembly implementation in Rust. What is the usual way to communicate with a JSON object from TypeScript to the Rust web assembly? Can a JSON object be passed directly from TypeScript to the WASM and interpreted in Rust, or does it need to be serialised as a string first? If so, which Rust crate should be used to deserialise it?
+
+The short answer is: **No, you do not need to manually serialize it to a string.**
+
+While passing a JSON string (using `JSON.stringify`) was the common workaround in the early days of WebAssembly, the modern and most efficient standard is to use **`wasm-bindgen`** combined with the **`serde-wasm-bindgen`** crate.
+
+This approach allows you to pass a native JavaScript object "directly" to Rust. Under the hood, `wasm-bindgen` passes a reference (a `JsValue`), and `serde-wasm-bindgen` deserializes that object structure directly into a Rust struct without the overhead of parsing a text string.
+
+Here is the breakdown of how to implement this.
+
+---
+
+#### The Modern Way: `serde-wasm-bindgen`
+
+This method is preferred because it produces smaller Wasm binaries and is generally faster than serializing/deserializing JSON strings.
+
+##### 1. The Rust Side (`lib.rs`)
+
+You will define a Rust struct that matches your TypeScript interface and derive `Deserialize`. Then, your exported function will accept a `JsValue`.
+
+```rust
+use wasm_bindgen::prelude::*;
+use serde::{Deserialize, Serialize};
+
+// 1. Define the shape of your data
+#[derive(Serialize, Deserialize)]
+pub struct UserConfig {
+    pub username: String,
+    pub active: bool,
+    pub settings: Vec<String>,
+}
+
+// 2. Create the exported function
+#[wasm_bindgen]
+pub fn process_user(val: JsValue) -> Result<String, JsValue> {
+    // 3. Deserialize the JsValue into your Rust Struct
+    // Note: We use serde_wasm_bindgen::from_value, not serde_json
+    let config: UserConfig = serde_wasm_bindgen::from_value(val)?;
+
+    // Now you can use 'config' as a normal Rust struct
+    if config.active {
+        return Ok(format!("Processing data for {}", config.username));
+    }
+
+    Ok("User is inactive".to_string())
+}
+```
+
+##### 2. The TypeScript Side
+
+You can simply pass the object. TypeScript will treat the Wasm function as if it accepts an `any` (or `JsValue`), but you can enforce types on your end.
+
+```typescript
+import init, { process_user } from './pkg/my_wasm_module';
+
+// Define the interface that matches the Rust struct
+interface UserConfig {
+    username: string;
+    active: boolean;
+    settings: string[];
+}
+
+async function run() {
+    await init();
+
+    const myData: UserConfig = {
+        username: "RustUser",
+        active: true,
+        settings: ["dark_mode", "notifications"]
+    };
+
+    // Pass the object directly!
+    const result = process_user(myData);
+    console.log(result);
+}
+run();
+```
+
+---
+
+#### Required Dependencies (`Cargo.toml`)
+
+To make the code above work, you need three specific crates in your `Cargo.toml`.
+
+| Crate | Purpose |
+| --- | --- |
+| **`wasm-bindgen`** | The core library that facilitates communication between JS and Rust. |
+| **`serde`** | The standard Rust framework for serializing and deserializing data structures (with the `derive` feature). |
+| **`serde-wasm-bindgen`** | The bridge that implements Serde for `JsValue`. |
+
+**Add this to your `Cargo.toml`:**
+
+```toml
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6" 
+
+```
+
+---
+
+#### Why not use `JSON.stringify`?
+
+You *can* still use the "String" method (passing a string from TS and using `serde_json` in Rust), but it is generally discouraged for high-performance paths.
+
+- **The String Method:**
+
+    1. TS: `JSON.stringify(obj)` (CPU cost to build string).
+    2. Wasm: Allocate memory for the string.
+    3. Rust: `serde_json::from_str(&string)` (CPU cost to parse text).
+
+- **The `serde-wasm-bindgen` Method:**
+
+    1. TS: Pass reference to object heap.
+    2. Rust: Iterate over object properties directly and construct Rust struct.
+
+**When might you use the String method?**
+
+The only time you might prefer `JSON.stringify` is if your data is **extremely large** and complex. Occasionally, the browser's native C++ implementation of `JSON.stringify` combined with Rust's `serde_json` can outpace the `serde-wasm-bindgen` object traversal due to JIT optimizations, but for 99% of use cases (configs, typical data payloads), `serde-wasm-bindgen` is superior.
+
+#### Summary
+
+1. **Do not** serialize to a string in TypeScript.
+2. Use **`serde`** to define your structs in Rust.
+3. Use **`serde-wasm-bindgen`** to convert the `JsValue` to your struct.
