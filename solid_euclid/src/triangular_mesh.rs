@@ -1,13 +1,23 @@
 use std::collections::HashMap;
 
 use crate::polygon_mesh::PolygonMesh;
-use crate::vertex::{Index, Vertex};
+use crate::vertex::{Index, VertexF32};
 
 /// Represents a triangular geometry with vertices and indices.
+///
+/// This struct uses single-precision floats (`f32`) via [`VertexF32`] for vertex data,
+/// making it suitable for GPU-based rendering pipelines. It is designed to be used
+/// with graphics APIs and renderers such as three.js, WebGL, WebGPU, and other
+/// GPU-accelerated rendering systems that typically operate with 32-bit floats.
+///
+/// For high-precision geometric calculations and construction, use
+/// [`PolygonMesh`](crate::polygon_mesh::PolygonMesh) with double-precision
+/// [`Vertex`](crate::vertex::Vertex) data, then convert to `TriangularGeometry`
+/// via [`TriangularMesh::from_polygon_mesh`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TriangularGeometry {
-    /// The vertices of the geometry.
-    pub vertices: Vec<Vertex>,
+    /// The vertices of the geometry using single-precision floats.
+    pub vertices: Vec<VertexF32>,
     /// The indices defining the triangles.
     pub indices: Vec<Index>,
 }
@@ -22,12 +32,24 @@ impl TriangularGeometry {
     }
 
     /// Creates a new `TriangularGeometry` with the given vertices and indices.
-    pub fn with_data(vertices: Vec<Vertex>, indices: Vec<Index>) -> Self {
+    pub fn with_data(vertices: Vec<VertexF32>, indices: Vec<Index>) -> Self {
         Self { vertices, indices }
     }
 }
 
 /// Represents a triangular mesh composed of multiple geometries identified by material IDs.
+///
+/// This struct serves as a container for GPU-ready triangle mesh data, organized by
+/// material. Each geometry uses single-precision floats (`f32`) which are standard
+/// for GPU rendering pipelines.
+///
+/// # Conversion from PolygonMesh
+///
+/// Use [`from_polygon_mesh`](Self::from_polygon_mesh) to convert high-precision
+/// [`PolygonMesh`] data to GPU-ready format. This conversion:
+/// - Tessellates convex polygons into triangles using fan triangulation
+/// - Converts vertex data from `f64` to `f32`
+/// - Groups triangles by material for efficient batch rendering
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TriangularMesh {
     /// A map from material ID to triangular geometry.
@@ -79,6 +101,9 @@ impl TriangularMesh {
     ///
     /// The material mapping from the `PolygonMesh` is preserved, with each polygon's
     /// `geometry_id` used to look up its material in the material map.
+    ///
+    /// During conversion, vertex data is converted from double-precision (`f64`)
+    /// to single-precision (`f32`) floats, suitable for GPU rendering.
     pub fn from_polygon_mesh(polygon_mesh: &PolygonMesh) -> Self {
         let mut mesh = TriangularMesh::new();
 
@@ -112,7 +137,8 @@ impl TriangularMesh {
                     let new_idx = *vertex_map.entry(orig_idx).or_insert_with(|| {
                         let idx = geometry.vertices.len() as Index;
                         if let Some(vertex) = polygon_mesh.vertices.get(orig_idx as usize) {
-                            geometry.vertices.push(*vertex);
+                            // Convert Vertex (f64) to VertexF32 (f32)
+                            geometry.vertices.push(vertex.to_f32());
                         }
                         idx
                     });
@@ -144,7 +170,16 @@ impl TriangularMesh {
 mod tests {
     use super::*;
     use crate::polygon_mesh::Polygon;
-    use glam::{DVec2, DVec3};
+    use crate::vertex::Vertex;
+    use glam::{DVec2, DVec3, Vec2, Vec3};
+
+    fn create_test_vertex_f32(x: f32, y: f32, z: f32) -> VertexF32 {
+        VertexF32::new(
+            Vec3::new(x, y, z),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec2::new(0.0, 0.0),
+        )
+    }
 
     fn create_test_vertex(x: f64, y: f64, z: f64) -> Vertex {
         Vertex::new(
@@ -154,11 +189,11 @@ mod tests {
         )
     }
 
-    fn create_test_triangle() -> (Vec<Vertex>, Vec<Index>) {
+    fn create_test_triangle() -> (Vec<VertexF32>, Vec<Index>) {
         let vertices = vec![
-            create_test_vertex(0.0, 0.0, 0.0),
-            create_test_vertex(1.0, 0.0, 0.0),
-            create_test_vertex(0.5, 1.0, 0.0),
+            create_test_vertex_f32(0.0, 0.0, 0.0),
+            create_test_vertex_f32(1.0, 0.0, 0.0),
+            create_test_vertex_f32(0.5, 1.0, 0.0),
         ];
         let indices = vec![0, 1, 2];
         (vertices, indices)
@@ -283,7 +318,7 @@ mod tests {
         mesh.insert("material".to_string(), geometry);
 
         if let Some(geo) = mesh.get_mut("material") {
-            geo.vertices.push(create_test_vertex(1.0, 2.0, 3.0));
+            geo.vertices.push(create_test_vertex_f32(1.0, 2.0, 3.0));
             geo.indices.push(0);
         }
 
@@ -526,12 +561,12 @@ mod tests {
         let triangular_mesh = TriangularMesh::from_polygon_mesh(&polygon_mesh);
         let geometry = triangular_mesh.get("test").unwrap();
 
-        // Verify vertex data is preserved
-        assert_eq!(geometry.vertices[0].position, v0.position);
-        assert_eq!(geometry.vertices[0].normal, v0.normal);
-        assert_eq!(geometry.vertices[0].uv, v0.uv);
+        // Verify vertex data is preserved (converted to f32)
+        assert_eq!(geometry.vertices[0].position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(geometry.vertices[0].normal, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(geometry.vertices[0].uv, Vec2::new(0.25, 0.75));
 
-        assert_eq!(geometry.vertices[1].position, v1.position);
-        assert_eq!(geometry.vertices[2].position, v2.position);
+        assert_eq!(geometry.vertices[1].position, Vec3::new(4.0, 5.0, 6.0));
+        assert_eq!(geometry.vertices[2].position, Vec3::new(7.0, 8.0, 9.0));
     }
 }

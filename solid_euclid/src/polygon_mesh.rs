@@ -40,6 +40,19 @@ impl Default for Polygon {
 
 /// Represents a polygon mesh with vertices, polygons, and material mappings.
 ///
+/// This struct uses double-precision floats (`f64`) via [`Vertex`] for vertex data,
+/// providing high precision for geometric calculations, CSG (Constructive Solid Geometry)
+/// operations, and mesh construction. It is designed for accurate geometric manipulation
+/// before conversion to GPU-ready formats.
+///
+/// # GPU Rendering
+///
+/// To prepare geometry for GPU-based renderers such as three.js, WebGL, or WebGPU,
+/// convert this mesh to a [`TriangularMesh`](crate::triangular_mesh::TriangularMesh)
+/// using [`TriangularMesh::from_polygon_mesh`](crate::triangular_mesh::TriangularMesh::from_polygon_mesh).
+/// This conversion tessellates polygons into triangles and converts vertex data from
+/// `f64` to `f32`, which is the standard precision for GPU rendering pipelines.
+///
 /// **Note:** All polygons in this mesh are assumed to be convex. Non-convex polygons
 /// may produce incorrect results during triangulation or other geometric operations.
 #[derive(Debug, Clone, PartialEq, Default)]
