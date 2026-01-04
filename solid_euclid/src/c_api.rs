@@ -16,13 +16,11 @@ pub extern "C" fn hello_c() -> *mut c_char {
 /// # Safety
 /// The pointer must be a valid pointer returned by `hello_c`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hello_c_free(s: *mut c_char) {
-    unsafe {
-        if !s.is_null() {
-            let _ = CString::from_raw(s);
-        }
+pub unsafe extern "C" fn hello_c_free(s: *mut c_char) { unsafe {
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
     }
-}
+}}
 
 #[cfg(test)]
 mod tests {
