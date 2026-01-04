@@ -257,7 +257,7 @@ async function main() {
   });
 
   // State
-  let currentSolidType: SolidType = 'Hexahedron';
+  let currentSolidType: SolidType = 'Icosahedron';
   let currentViewMode: ViewMode | null = null;
   let currentMergedGeometry: THREE.BufferGeometry | null = null;
   let solidGroup: THREE.Group | null = null;
@@ -361,8 +361,8 @@ async function main() {
     }
   }
 
-  // Initialize with default solid (hexahedron/cube)
-  setSolidType('Hexahedron');
+  // Initialize with default wireframe Icosahedron
+  setSolidType('Icosahedron');
   setViewMode('wireframe');
 
   // Setup menu event listeners
