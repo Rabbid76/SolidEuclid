@@ -4,7 +4,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import init, { create_platonic_solid, WasmTriangularGeometry } from '@solid-euclid';
 
 type ViewMode = 'solid' | 'wireframe';
-type SolidType = 'tetrahedron' | 'hexahedron' | 'octahedron' | 'dodecahedron' | 'icosahedron';
+type SolidType = 'Tetrahedron' | 'Hexahedron' | 'Octahedron' | 'Dodecahedron' | 'Icosahedron';
+
+// Material IDs for the 5 textures (applied cyclically)
+const MATERIAL_IDS = ['mat0', 'mat1', 'mat2', 'mat3', 'mat4'];
 
 /**
  * Creates a Three.js BufferGeometry from a WasmTriangularGeometry
@@ -24,6 +27,65 @@ function createBufferGeometryFromWasm(wasmGeometry: WasmTriangularGeometry): THR
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
 
   return geometry;
+}
+
+/**
+ * Merges multiple BufferGeometries into one
+ */
+function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (geometries.length === 0) {
+    return new THREE.BufferGeometry();
+  }
+  
+  if (geometries.length === 1) {
+    return geometries[0]!;
+  }
+  
+  const merged = new THREE.BufferGeometry();
+  
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let vertexOffset = 0;
+  
+  for (const geo of geometries) {
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const normAttr = geo.getAttribute('normal') as THREE.BufferAttribute;
+    const uvAttr = geo.getAttribute('uv') as THREE.BufferAttribute;
+    const indexAttr = geo.getIndex();
+    
+    // Copy positions
+    for (let i = 0; i < posAttr.count; i++) {
+      positions.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+    }
+    
+    // Copy normals
+    for (let i = 0; i < normAttr.count; i++) {
+      normals.push(normAttr.getX(i), normAttr.getY(i), normAttr.getZ(i));
+    }
+    
+    // Copy UVs
+    for (let i = 0; i < uvAttr.count; i++) {
+      uvs.push(uvAttr.getX(i), uvAttr.getY(i));
+    }
+    
+    // Copy indices with offset
+    if (indexAttr) {
+      for (let i = 0; i < indexAttr.count; i++) {
+        indices.push(indexAttr.getX(i) + vertexOffset);
+      }
+    }
+    
+    vertexOffset += posAttr.count;
+  }
+  
+  merged.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  merged.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  merged.setIndex(indices);
+  
+  return merged;
 }
 
 /**
@@ -144,78 +206,117 @@ async function main() {
   const axesHelper = new THREE.AxesHelper(2);
   scene.add(axesHelper);
 
-  // Load texture
+  // Load 5 textures for cyclic material assignment
   const textureLoader = new THREE.TextureLoader();
-  const texture = await new Promise<THREE.Texture>((resolve, reject) => {
-    textureLoader.load(
-      '../assets/512x512 Texel Density Texture 1.png',
-      (tex: THREE.Texture) => {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        resolve(tex);
-      },
-      undefined,
-      reject
-    );
-  });
+  const textureFiles = [
+    '../assets/512x512 Texel Density Texture 1.png',
+    '../assets/512x512 Texel Density Texture 2.png',
+    '../assets/512x512 Texel Density Texture 3.png',
+    '../assets/512x512 Texel Density Texture 4.png',
+    '../assets/512x512 Texel Density Texture 5.png',
+  ];
+  
+  const textures = await Promise.all(
+    textureFiles.map((file) => new Promise<THREE.Texture>((resolve, reject) => {
+      textureLoader.load(
+        file,
+        (tex: THREE.Texture) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          resolve(tex);
+        },
+        undefined,
+        reject
+      );
+    }))
+  );
 
-  // Create MeshStandardMaterial with 50% diffuse (roughness controls this)
-  const solidMaterial = new THREE.MeshStandardMaterial({
-    map: texture,
-    roughness: 0.5,
-    metalness: 0.0,
+  // Create 5 MeshStandardMaterials with 50% diffuse (roughness controls this)
+  const solidMaterials: Map<string, THREE.MeshStandardMaterial> = new Map();
+  MATERIAL_IDS.forEach((id, index) => {
+    solidMaterials.set(id, new THREE.MeshStandardMaterial({
+      map: textures[index],
+      roughness: 0.5,
+      metalness: 0.0,
+    }));
   });
 
   // State
-  let currentSolidType: SolidType = 'hexahedron';
+  let currentSolidType: SolidType = 'Hexahedron';
   let currentViewMode: ViewMode | null = null;
-  let currentGeometry: THREE.BufferGeometry | null = null;
-  let solidMesh: THREE.Mesh | null = null;
+  let currentMergedGeometry: THREE.BufferGeometry | null = null;
+  let solidGroup: THREE.Group | null = null;
   let wireframeGroup: THREE.Group | null = null;
 
   /**
-   * Creates the geometry and mesh objects for the current solid type
+   * Creates the geometry and mesh objects for the current solid type using Material.Array
    */
   function createSolidObjects(solidType: SolidType): {
-    geometry: THREE.BufferGeometry;
-    mesh: THREE.Mesh;
+    mergedGeometry: THREE.BufferGeometry;
+    meshGroup: THREE.Group;
     wireframe: THREE.Group;
   } {
-    // Create geometry from WASM
-    const wasmGeometry = create_platonic_solid(solidType, 'default');
-    const geometry = createBufferGeometryFromWasm(wasmGeometry);
-
-    // Create solid mesh
-    const mesh = new THREE.Mesh(geometry, solidMaterial);
+    // Create model object with Material.Array for cyclic texture assignment
+    // Pass the object directly to WASM - no JSON.stringify needed!
+    const wasmMesh = create_platonic_solid({
+      geometry: solidType,
+      material: { Array: MATERIAL_IDS }
+    });
+    
+    // Create a group to hold meshes for each material
+    const meshGroup = new THREE.Group();
+    const geometries: THREE.BufferGeometry[] = [];
+    
+    // Create a mesh for each material in the mesh
+    const materialIds = wasmMesh.material_ids as string[];
+    for (let i = 0; i < wasmMesh.geometry_count; i++) {
+      const wasmGeometry = wasmMesh.get_geometry(i);
+      if (wasmGeometry) {
+        const geometry = createBufferGeometryFromWasm(wasmGeometry);
+        geometries.push(geometry);
+        
+        const materialId = materialIds[i];
+        if (materialId) {
+          const material = solidMaterials.get(materialId);
+          if (material) {
+            const mesh = new THREE.Mesh(geometry, material);
+            meshGroup.add(mesh);
+          }
+        }
+      }
+    }
+    
+    // Create merged geometry for wireframe visualization
+    const mergedGeometry = mergeBufferGeometries(geometries);
 
     // Create wireframe visualization group
     const wireframe = new THREE.Group();
-    const wireframeEdges = createWireframeEdges(geometry);
+    const wireframeEdges = createWireframeEdges(mergedGeometry);
     wireframe.add(wireframeEdges);
-    const vertexNormals = createVertexNormals(geometry, 0.15);
+    const vertexNormals = createVertexNormals(mergedGeometry, 0.15);
     wireframe.add(vertexNormals);
 
-    return { geometry, mesh, wireframe };
+    return { mergedGeometry, meshGroup, wireframe };
   }
 
   /**
    * Updates the scene with a new solid type
    */
   function setSolidType(solidType: SolidType) {
-    if (solidType === currentSolidType && currentGeometry) return;
+    if (solidType === currentSolidType && currentMergedGeometry) return;
 
     // Remove old objects from scene
-    if (solidMesh) scene.remove(solidMesh);
+    if (solidGroup) scene.remove(solidGroup);
     if (wireframeGroup) scene.remove(wireframeGroup);
 
     // Dispose old geometry
-    if (currentGeometry) {
-      currentGeometry.dispose();
+    if (currentMergedGeometry) {
+      currentMergedGeometry.dispose();
     }
 
     // Create new objects
     const objects = createSolidObjects(solidType);
-    currentGeometry = objects.geometry;
-    solidMesh = objects.mesh;
+    currentMergedGeometry = objects.mergedGeometry;
+    solidGroup = objects.meshGroup;
     wireframeGroup = objects.wireframe;
     currentSolidType = solidType;
 
@@ -234,15 +335,15 @@ async function main() {
     
     if (mode === 'solid') {
       if (wireframeGroup) scene.remove(wireframeGroup);
-      if (solidMesh) scene.add(solidMesh);
+      if (solidGroup) scene.add(solidGroup);
     } else {
-      if (solidMesh) scene.remove(solidMesh);
+      if (solidGroup) scene.remove(solidGroup);
       if (wireframeGroup) scene.add(wireframeGroup);
     }
   }
 
   // Initialize with default solid (hexahedron/cube)
-  setSolidType('hexahedron');
+  setSolidType('Hexahedron');
   setViewMode('wireframe');
 
   // Setup menu event listeners
