@@ -2,7 +2,7 @@ import init from '@solid-euclid';
 
 async function main() {
   await init();
-  
+
   const app = document.getElementById('app');
   if (!app) return;
 

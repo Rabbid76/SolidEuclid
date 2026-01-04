@@ -498,11 +498,7 @@ mod tests {
             face_map,
         };
 
-        if let Material::Map {
-            default,
-            face_map,
-        } = material
-        {
+        if let Material::Map { default, face_map } = material {
             assert_eq!(default, "default");
             assert_eq!(face_map.get(&0), Some(&"front".to_string()));
             assert_eq!(face_map.get(&1), Some(&"back".to_string()));
@@ -561,11 +557,7 @@ mod tests {
         let model = Model::new(PlatonicSolid::Dodecahedron, material);
         assert_eq!(model.geometry, PlatonicSolid::Dodecahedron);
 
-        if let Material::Map {
-            default,
-            face_map,
-        } = &model.material
-        {
+        if let Material::Map { default, face_map } = &model.material {
             assert_eq!(default, "base");
             assert_eq!(face_map.len(), 2);
         } else {
@@ -853,7 +845,11 @@ mod tests {
         // All vertices should be on a unit sphere (approximately)
         for vertex in &mesh.vertices {
             let length = vertex.position.length();
-            assert!((length - 1.0).abs() < 0.01, "Vertex not on unit sphere: {}", length);
+            assert!(
+                (length - 1.0).abs() < 0.01,
+                "Vertex not on unit sphere: {}",
+                length
+            );
         }
     }
 
@@ -866,7 +862,11 @@ mod tests {
         let expected_length = 1.0 / 3.0_f64.sqrt() * 3.0_f64.sqrt();
         for vertex in &mesh.vertices {
             let length = vertex.position.length();
-            assert!((length - expected_length).abs() < 0.01, "Unexpected vertex distance: {}", length);
+            assert!(
+                (length - expected_length).abs() < 0.01,
+                "Unexpected vertex distance: {}",
+                length
+            );
         }
     }
 
@@ -1137,11 +1137,19 @@ mod tests {
                     let dot_stored_outward = stored_normal.dot(outward_dir);
                     let dot_winding_outward = winding_normal.dot(outward_dir);
 
-                    let status = if dot_winding_outward > 0.5 { "OK" } else { "WRONG" };
+                    let status = if dot_winding_outward > 0.5 {
+                        "OK"
+                    } else {
+                        "WRONG"
+                    };
 
                     println!(
                         "  Face {}: winding·stored={:.3}, stored·outward={:.3}, winding·outward={:.3} [{}]",
-                        face_idx, dot_stored_winding, dot_stored_outward, dot_winding_outward, status
+                        face_idx,
+                        dot_stored_winding,
+                        dot_stored_outward,
+                        dot_winding_outward,
+                        status
                     );
                 }
             }
@@ -1517,7 +1525,8 @@ mod tests {
 
         #[test]
         fn test_model_json_structure() {
-            let model = Model::with_uniform_material(PlatonicSolid::Icosahedron, "silver".to_string());
+            let model =
+                Model::with_uniform_material(PlatonicSolid::Icosahedron, "silver".to_string());
             let json = serde_json::to_string_pretty(&model).unwrap();
 
             // Verify the JSON contains expected fields
@@ -1544,4 +1553,3 @@ mod tests {
         }
     }
 }
-

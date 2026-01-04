@@ -212,7 +212,10 @@ mod tests {
 
     #[test]
     fn test_create_platonic_solid_uniform_tetrahedron() {
-        let model = Model::new(PlatonicSolid::Tetrahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Tetrahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         assert_eq!(mesh.geometry_count(), 1);
         assert_eq!(mesh.material_ids.len(), 1);
@@ -225,7 +228,10 @@ mod tests {
 
     #[test]
     fn test_create_platonic_solid_uniform_hexahedron() {
-        let model = Model::new(PlatonicSolid::Hexahedron, Material::Uniform("cube_mat".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Hexahedron,
+            Material::Uniform("cube_mat".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         assert_eq!(mesh.geometry_count(), 1);
 
@@ -274,7 +280,10 @@ mod tests {
 
     #[test]
     fn test_create_platonic_solid_octahedron() {
-        let model = Model::new(PlatonicSolid::Octahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Octahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         assert_eq!(geometry.vertex_count(), 24); // 8 faces * 3 vertices
@@ -283,7 +292,10 @@ mod tests {
 
     #[test]
     fn test_create_platonic_solid_dodecahedron() {
-        let model = Model::new(PlatonicSolid::Dodecahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Dodecahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         assert_eq!(geometry.vertex_count(), 60); // 12 faces * 5 vertices
@@ -292,7 +304,10 @@ mod tests {
 
     #[test]
     fn test_create_platonic_solid_icosahedron() {
-        let model = Model::new(PlatonicSolid::Icosahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Icosahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         assert_eq!(geometry.vertex_count(), 60); // 20 faces * 3 vertices
@@ -340,7 +355,10 @@ mod tests {
 
     #[test]
     fn test_geometry_data_not_empty() {
-        let model = Model::new(PlatonicSolid::Tetrahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Tetrahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         assert!(!geometry.vertices.is_empty());
@@ -351,7 +369,10 @@ mod tests {
 
     #[test]
     fn test_geometry_data_sizes_consistent() {
-        let model = Model::new(PlatonicSolid::Hexahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Hexahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         // vertices and normals should have same length (3 components each)
@@ -362,7 +383,10 @@ mod tests {
 
     #[test]
     fn test_normals_are_normalized() {
-        let model = Model::new(PlatonicSolid::Octahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Octahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         for i in (0..geometry.normals.len()).step_by(3) {
@@ -380,7 +404,10 @@ mod tests {
 
     #[test]
     fn test_indices_within_bounds() {
-        let model = Model::new(PlatonicSolid::Icosahedron, Material::Uniform("default".to_string()));
+        let model = Model::new(
+            PlatonicSolid::Icosahedron,
+            Material::Uniform("default".to_string()),
+        );
         let mesh = create_mesh_from_model(model);
         let geometry = mesh.get_geometry(0).unwrap();
         let vertex_count = geometry.vertex_count() as u32;

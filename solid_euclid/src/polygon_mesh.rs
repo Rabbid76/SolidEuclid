@@ -413,8 +413,14 @@ mod tests {
         let polygon2 = Polygon::new(vec![3, 4, 5], DVec3::Y, 2);
         let polygon3 = Polygon::new(vec![6, 7, 8], DVec3::X, 99);
 
-        assert_eq!(mesh.get_polygon_material(&polygon1), Some(&"concrete".to_string()));
-        assert_eq!(mesh.get_polygon_material(&polygon2), Some(&"brick".to_string()));
+        assert_eq!(
+            mesh.get_polygon_material(&polygon1),
+            Some(&"concrete".to_string())
+        );
+        assert_eq!(
+            mesh.get_polygon_material(&polygon2),
+            Some(&"brick".to_string())
+        );
         assert_eq!(mesh.get_polygon_material(&polygon3), None);
     }
 
@@ -543,7 +549,8 @@ mod tests {
         assert_eq!(mesh.polygon_count(), 0);
 
         // Test with 1 vertex
-        let result = mesh.add_convex_polygon_from_vertices(1, vec![create_test_vertex(0.0, 0.0, 0.0)]);
+        let result =
+            mesh.add_convex_polygon_from_vertices(1, vec![create_test_vertex(0.0, 0.0, 0.0)]);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -768,7 +775,8 @@ mod tests {
             DVec2::new(0.0, 1.0),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points)
+            .unwrap();
 
         // Positions should be translated by origin
         assert!((mesh.vertices[0].position - DVec3::new(10.0, 20.0, 30.0)).length() < 1e-10);
@@ -788,7 +796,8 @@ mod tests {
             DVec2::new(0.0, 1.0),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points)
+            .unwrap();
 
         // Y-axis of plane = cross(Z, X) = cross(Y, X) = -Z, so local Y maps to -Z
         // X-axis of plane = cross(Y_plane, Z_plane) = cross(-Z, Y) = X
@@ -813,7 +822,8 @@ mod tests {
             DVec2::new(0.0, 1.0),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points)
+            .unwrap();
 
         // Z-axis = X (normal)
         // Y-axis = cross(X, Y) = Z
@@ -857,11 +867,8 @@ mod tests {
         );
 
         // Test with 2 points
-        let result = mesh.add_convex_polygon_from_points_on_plane(
-            1,
-            &plane,
-            vec![DVec2::ZERO, DVec2::X],
-        );
+        let result =
+            mesh.add_convex_polygon_from_points_on_plane(1, &plane, vec![DVec2::ZERO, DVec2::X]);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -907,7 +914,8 @@ mod tests {
             DVec2::new(0.9, 0.8),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points.clone()).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points.clone())
+            .unwrap();
 
         // UVs should exactly match the input points
         assert_eq!(mesh.vertices[0].uv, points[0]);
@@ -927,7 +935,8 @@ mod tests {
             DVec2::new(0.5, 1.0),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points)
+            .unwrap();
 
         let expected_normal = normal.normalize();
 
@@ -951,7 +960,8 @@ mod tests {
             DVec2::new(1.0, 0.0),
             DVec2::new(0.5, 1.0),
         ];
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane1, points1).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane1, points1)
+            .unwrap();
 
         // Second polygon on a different plane
         let plane2 = Plane::new(DVec3::new(5.0, 0.0, 0.0), DVec3::Z, DVec3::X);
@@ -960,7 +970,8 @@ mod tests {
             DVec2::new(2.0, 0.0),
             DVec2::new(1.0, 2.0),
         ];
-        mesh.add_convex_polygon_from_points_on_plane(2, &plane2, points2).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(2, &plane2, points2)
+            .unwrap();
 
         assert_eq!(mesh.vertex_count(), 6);
         assert_eq!(mesh.polygon_count(), 2);
@@ -982,15 +993,16 @@ mod tests {
             DVec2::new(0.0, 1.0),
         ];
 
-        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points).unwrap();
+        mesh.add_convex_polygon_from_points_on_plane(1, &plane, points)
+            .unwrap();
 
         // The recalculated x-axis should be normalized and orthogonal to z
         // z = (0, 0, 1)
         // y = cross(z, x_axis) = cross((0,0,1), (1,1,0)) = (-1, 1, 0) normalized = (-0.707, 0.707, 0)
         // x = cross(y, z) = cross((-0.707, 0.707, 0), (0, 0, 1)) = (0.707, 0.707, 0)
-        
+
         let sqrt2_inv = 1.0 / 2.0_f64.sqrt();
-        
+
         // Point (1, 0) should map to (sqrt2_inv, sqrt2_inv, 0)
         assert!((mesh.vertices[1].position.x - sqrt2_inv).abs() < 1e-10);
         assert!((mesh.vertices[1].position.y - sqrt2_inv).abs() < 1e-10);

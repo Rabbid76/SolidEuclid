@@ -304,7 +304,7 @@ mod tests {
         let geometry = TriangularGeometry::with_data(
             vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0], // 3 vertices
             vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0], // 3 normals
-            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],                 // 3 uvs
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],                // 3 uvs
             vec![0, 1, 2],
         );
         mesh.insert("material".to_string(), geometry);
@@ -402,8 +402,8 @@ mod tests {
         let mut mesh1 = TriangularMesh::new();
         let geometry1 = TriangularGeometry::with_data(
             vec![1.0001, 0.0, 0.0], // position
-            vec![0.0, 1.0, 0.0],     // normal
-            vec![0.0, 0.0],          // uv
+            vec![0.0, 1.0, 0.0],    // normal
+            vec![0.0, 0.0],         // uv
             vec![0],
         );
         mesh1.insert("mat".to_string(), geometry1);
@@ -443,6 +443,9 @@ mod tests {
         let hash = mesh.geometry_hash().unwrap();
 
         // Should be all lowercase hex characters
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
     }
 }

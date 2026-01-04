@@ -49,8 +49,18 @@ impl TriangularGeometry {
     /// * `normals` - Flat array of normal vectors (every 3 elements = x, y, z)
     /// * `uvs` - Flat array of texture coordinates (every 2 elements = u, v)
     /// * `indices` - Triangle indices
-    pub fn with_data(vertices: Vec<f32>, normals: Vec<f32>, uvs: Vec<f32>, indices: Vec<Index>) -> Self {
-        Self { vertices, normals, uvs, indices }
+    pub fn with_data(
+        vertices: Vec<f32>,
+        normals: Vec<f32>,
+        uvs: Vec<f32>,
+        indices: Vec<Index>,
+    ) -> Self {
+        Self {
+            vertices,
+            normals,
+            uvs,
+            indices,
+        }
     }
 
     /// Returns the number of vertices in the geometry.
@@ -170,8 +180,16 @@ impl TriangularMesh {
                         if let Some(vertex) = polygon_mesh.vertices.get(orig_idx as usize) {
                             // Convert Vertex (f64) to f32 flat arrays
                             geometry.add_vertex(
-                                [vertex.position.x as f32, vertex.position.y as f32, vertex.position.z as f32],
-                                [vertex.normal.x as f32, vertex.normal.y as f32, vertex.normal.z as f32],
+                                [
+                                    vertex.position.x as f32,
+                                    vertex.position.y as f32,
+                                    vertex.position.z as f32,
+                                ],
+                                [
+                                    vertex.normal.x as f32,
+                                    vertex.normal.y as f32,
+                                    vertex.normal.z as f32,
+                                ],
                                 [vertex.uv.x as f32, vertex.uv.y as f32],
                             );
                         }
@@ -219,19 +237,19 @@ mod tests {
     /// Creates test triangle data (vertices, normals, uvs, indices) in flat array format
     fn create_test_triangle() -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<Index>) {
         let vertices = vec![
-            0.0, 0.0, 0.0,  // vertex 0
-            1.0, 0.0, 0.0,  // vertex 1
-            0.5, 1.0, 0.0,  // vertex 2
+            0.0, 0.0, 0.0, // vertex 0
+            1.0, 0.0, 0.0, // vertex 1
+            0.5, 1.0, 0.0, // vertex 2
         ];
         let normals = vec![
-            0.0, 1.0, 0.0,  // normal 0
-            0.0, 1.0, 0.0,  // normal 1
-            0.0, 1.0, 0.0,  // normal 2
+            0.0, 1.0, 0.0, // normal 0
+            0.0, 1.0, 0.0, // normal 1
+            0.0, 1.0, 0.0, // normal 2
         ];
         let uvs = vec![
-            0.0, 0.0,  // uv 0
-            0.0, 0.0,  // uv 1
-            0.0, 0.0,  // uv 2
+            0.0, 0.0, // uv 0
+            0.0, 0.0, // uv 1
+            0.0, 0.0, // uv 2
         ];
         let indices = vec![0, 1, 2];
         (vertices, normals, uvs, indices)
@@ -271,8 +289,8 @@ mod tests {
         );
 
         assert_eq!(geometry.vertices.len(), 9); // 3 vertices * 3 components
-        assert_eq!(geometry.normals.len(), 9);  // 3 normals * 3 components
-        assert_eq!(geometry.uvs.len(), 6);       // 3 uvs * 2 components
+        assert_eq!(geometry.normals.len(), 9); // 3 normals * 3 components
+        assert_eq!(geometry.uvs.len(), 6); // 3 uvs * 2 components
         assert_eq!(geometry.indices.len(), 3);
         assert_eq!(geometry.vertex_count(), 3);
         assert_eq!(geometry.vertices, vertices);
@@ -284,9 +302,9 @@ mod tests {
     #[test]
     fn test_triangular_geometry_add_vertex() {
         let mut geometry = TriangularGeometry::new();
-        
+
         geometry.add_vertex([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], [0.5, 0.5]);
-        
+
         assert_eq!(geometry.vertex_count(), 1);
         assert_eq!(geometry.vertices, vec![1.0, 2.0, 3.0]);
         assert_eq!(geometry.normals, vec![0.0, 1.0, 0.0]);
@@ -296,11 +314,11 @@ mod tests {
     #[test]
     fn test_triangular_geometry_add_multiple_vertices() {
         let mut geometry = TriangularGeometry::new();
-        
+
         geometry.add_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]);
         geometry.add_vertex([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0]);
         geometry.add_vertex([0.5, 1.0, 0.0], [0.0, 1.0, 0.0], [0.5, 1.0]);
-        
+
         assert_eq!(geometry.vertex_count(), 3);
         assert_eq!(geometry.vertices.len(), 9);
         assert_eq!(geometry.normals.len(), 9);
@@ -479,10 +497,10 @@ mod tests {
         assert_eq!(triangular_mesh.len(), 1);
         let geometry = triangular_mesh.get("wood").unwrap();
         assert_eq!(geometry.vertex_count(), 3);
-        assert_eq!(geometry.vertices.len(), 9);  // 3 vertices * 3 components
-        assert_eq!(geometry.normals.len(), 9);   // 3 normals * 3 components
-        assert_eq!(geometry.uvs.len(), 6);        // 3 uvs * 2 components
-        assert_eq!(geometry.indices.len(), 3);   // 1 triangle = 3 indices
+        assert_eq!(geometry.vertices.len(), 9); // 3 vertices * 3 components
+        assert_eq!(geometry.normals.len(), 9); // 3 normals * 3 components
+        assert_eq!(geometry.uvs.len(), 6); // 3 uvs * 2 components
+        assert_eq!(geometry.indices.len(), 3); // 1 triangle = 3 indices
     }
 
     #[test]
@@ -504,7 +522,7 @@ mod tests {
         let geometry = triangular_mesh.get("floor").unwrap();
         assert_eq!(geometry.vertex_count(), 4);
         assert_eq!(geometry.vertices.len(), 12); // 4 vertices * 3 components
-        assert_eq!(geometry.indices.len(), 6);   // 2 triangles = 6 indices
+        assert_eq!(geometry.indices.len(), 6); // 2 triangles = 6 indices
 
         // Verify fan triangulation: (0,1,2) and (0,2,3)
         assert_eq!(geometry.indices[0], 0);
@@ -534,7 +552,7 @@ mod tests {
         let geometry = triangular_mesh.get("pentagon").unwrap();
         assert_eq!(geometry.vertex_count(), 5);
         assert_eq!(geometry.vertices.len(), 15); // 5 vertices * 3 components
-        assert_eq!(geometry.indices.len(), 9);   // 3 triangles = 9 indices (n-2 triangles)
+        assert_eq!(geometry.indices.len(), 9); // 3 triangles = 9 indices (n-2 triangles)
     }
 
     #[test]
@@ -672,7 +690,12 @@ mod tests {
     // Winding order preservation tests
 
     /// Helper function to calculate the winding normal for a triangle from indices
-    fn calculate_triangle_winding_normal(geometry: &TriangularGeometry, i0: usize, i1: usize, i2: usize) -> glam::Vec3 {
+    fn calculate_triangle_winding_normal(
+        geometry: &TriangularGeometry,
+        i0: usize,
+        i1: usize,
+        i2: usize,
+    ) -> glam::Vec3 {
         let idx0 = geometry.indices[i0] as usize;
         let idx1 = geometry.indices[i1] as usize;
         let idx2 = geometry.indices[i2] as usize;
@@ -716,7 +739,8 @@ mod tests {
 
         // Check both triangles have normals pointing in +Z direction
         for tri in 0..(geometry.indices.len() / 3) {
-            let winding_normal = calculate_triangle_winding_normal(geometry, tri * 3, tri * 3 + 1, tri * 3 + 2);
+            let winding_normal =
+                calculate_triangle_winding_normal(geometry, tri * 3, tri * 3 + 1, tri * 3 + 2);
             assert!(
                 winding_normal.z > 0.99,
                 "Triangle {} has wrong winding (normal.z = {})",
@@ -728,8 +752,8 @@ mod tests {
 
     #[test]
     fn test_triangular_mesh_winding_order_all_platonic_solids() {
-        use crate::platonic_solid::{Model, PlatonicSolid};
         use crate::geometry_model::GeometryModel;
+        use crate::platonic_solid::{Model, PlatonicSolid};
 
         let solids = [
             (PlatonicSolid::Tetrahedron, "Tetrahedron"),
@@ -745,17 +769,31 @@ mod tests {
 
             for (material_id, geometry) in &triangular_mesh.geometries {
                 for tri in 0..(geometry.indices.len() / 3) {
-                    let winding_normal = calculate_triangle_winding_normal(geometry, tri * 3, tri * 3 + 1, tri * 3 + 2);
-                    
+                    let winding_normal = calculate_triangle_winding_normal(
+                        geometry,
+                        tri * 3,
+                        tri * 3 + 1,
+                        tri * 3 + 2,
+                    );
+
                     // Calculate triangle centroid
                     let idx0 = geometry.indices[tri * 3] as usize;
                     let idx1 = geometry.indices[tri * 3 + 1] as usize;
                     let idx2 = geometry.indices[tri * 3 + 2] as usize;
 
                     let centroid = glam::Vec3::new(
-                        (geometry.vertices[idx0 * 3] + geometry.vertices[idx1 * 3] + geometry.vertices[idx2 * 3]) / 3.0,
-                        (geometry.vertices[idx0 * 3 + 1] + geometry.vertices[idx1 * 3 + 1] + geometry.vertices[idx2 * 3 + 1]) / 3.0,
-                        (geometry.vertices[idx0 * 3 + 2] + geometry.vertices[idx1 * 3 + 2] + geometry.vertices[idx2 * 3 + 2]) / 3.0,
+                        (geometry.vertices[idx0 * 3]
+                            + geometry.vertices[idx1 * 3]
+                            + geometry.vertices[idx2 * 3])
+                            / 3.0,
+                        (geometry.vertices[idx0 * 3 + 1]
+                            + geometry.vertices[idx1 * 3 + 1]
+                            + geometry.vertices[idx2 * 3 + 1])
+                            / 3.0,
+                        (geometry.vertices[idx0 * 3 + 2]
+                            + geometry.vertices[idx1 * 3 + 2]
+                            + geometry.vertices[idx2 * 3 + 2])
+                            / 3.0,
                     );
 
                     // For convex solids centered at origin, normal should point outward
