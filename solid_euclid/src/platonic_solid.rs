@@ -193,10 +193,10 @@ impl Model {
 
         // UV coordinates for quad faces
         let uvs = [
-            DVec2::new(0.0, 1.0),
-            DVec2::new(1.0, 1.0),
-            DVec2::new(1.0, 0.0),
             DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(0.0, 1.0),
         ];
 
         for (face_index, (face_indices, normal)) in faces.iter().enumerate() {
