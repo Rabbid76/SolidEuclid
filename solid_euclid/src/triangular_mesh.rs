@@ -668,4 +668,108 @@ mod tests {
         assert_eq!(geometry.vertices[7], 8.0);
         assert_eq!(geometry.vertices[8], 9.0);
     }
+
+    // Winding order preservation tests
+
+    /// Helper function to calculate the winding normal for a triangle from indices
+    fn calculate_triangle_winding_normal(geometry: &TriangularGeometry, i0: usize, i1: usize, i2: usize) -> glam::Vec3 {
+        let idx0 = geometry.indices[i0] as usize;
+        let idx1 = geometry.indices[i1] as usize;
+        let idx2 = geometry.indices[i2] as usize;
+
+        let p0 = glam::Vec3::new(
+            geometry.vertices[idx0 * 3],
+            geometry.vertices[idx0 * 3 + 1],
+            geometry.vertices[idx0 * 3 + 2],
+        );
+        let p1 = glam::Vec3::new(
+            geometry.vertices[idx1 * 3],
+            geometry.vertices[idx1 * 3 + 1],
+            geometry.vertices[idx1 * 3 + 2],
+        );
+        let p2 = glam::Vec3::new(
+            geometry.vertices[idx2 * 3],
+            geometry.vertices[idx2 * 3 + 1],
+            geometry.vertices[idx2 * 3 + 2],
+        );
+
+        let v1 = p1 - p0;
+        let v2 = p2 - p0;
+        v1.cross(v2).normalize()
+    }
+
+    #[test]
+    fn test_triangular_mesh_winding_order_ccw_xy_plane() {
+        let mut polygon_mesh = PolygonMesh::new();
+
+        // CCW quad in XY plane (normal should point +Z)
+        polygon_mesh.add_vertex(create_test_vertex(0.0, 0.0, 0.0));
+        polygon_mesh.add_vertex(create_test_vertex(1.0, 0.0, 0.0));
+        polygon_mesh.add_vertex(create_test_vertex(1.0, 1.0, 0.0));
+        polygon_mesh.add_vertex(create_test_vertex(0.0, 1.0, 0.0));
+
+        polygon_mesh.add_polygon(Polygon::new(vec![0, 1, 2, 3], DVec3::Z, 1));
+        polygon_mesh.set_material(1, "test".to_string());
+
+        let triangular_mesh = TriangularMesh::from_polygon_mesh(&polygon_mesh);
+        let geometry = triangular_mesh.get("test").unwrap();
+
+        // Check both triangles have normals pointing in +Z direction
+        for tri in 0..(geometry.indices.len() / 3) {
+            let winding_normal = calculate_triangle_winding_normal(geometry, tri * 3, tri * 3 + 1, tri * 3 + 2);
+            assert!(
+                winding_normal.z > 0.99,
+                "Triangle {} has wrong winding (normal.z = {})",
+                tri,
+                winding_normal.z
+            );
+        }
+    }
+
+    #[test]
+    fn test_triangular_mesh_winding_order_all_platonic_solids() {
+        use crate::platonic_solid::{Model, PlatonicSolid};
+        use crate::geometry_model::GeometryModel;
+
+        let solids = [
+            (PlatonicSolid::Tetrahedron, "Tetrahedron"),
+            (PlatonicSolid::Hexahedron, "Hexahedron"),
+            (PlatonicSolid::Octahedron, "Octahedron"),
+            (PlatonicSolid::Dodecahedron, "Dodecahedron"),
+            (PlatonicSolid::Icosahedron, "Icosahedron"),
+        ];
+
+        for (solid, name) in solids {
+            let model = Model::with_default_material(solid);
+            let triangular_mesh = model.to_triangular_mesh().unwrap();
+
+            for (material_id, geometry) in &triangular_mesh.geometries {
+                for tri in 0..(geometry.indices.len() / 3) {
+                    let winding_normal = calculate_triangle_winding_normal(geometry, tri * 3, tri * 3 + 1, tri * 3 + 2);
+                    
+                    // Calculate triangle centroid
+                    let idx0 = geometry.indices[tri * 3] as usize;
+                    let idx1 = geometry.indices[tri * 3 + 1] as usize;
+                    let idx2 = geometry.indices[tri * 3 + 2] as usize;
+
+                    let centroid = glam::Vec3::new(
+                        (geometry.vertices[idx0 * 3] + geometry.vertices[idx1 * 3] + geometry.vertices[idx2 * 3]) / 3.0,
+                        (geometry.vertices[idx0 * 3 + 1] + geometry.vertices[idx1 * 3 + 1] + geometry.vertices[idx2 * 3 + 1]) / 3.0,
+                        (geometry.vertices[idx0 * 3 + 2] + geometry.vertices[idx1 * 3 + 2] + geometry.vertices[idx2 * 3 + 2]) / 3.0,
+                    );
+
+                    // For convex solids centered at origin, normal should point outward
+                    let dot = winding_normal.dot(centroid.normalize());
+                    assert!(
+                        dot > 0.5,
+                        "{} (material {}): triangle {} has wrong winding (winding·outward = {})",
+                        name,
+                        material_id,
+                        tri,
+                        dot
+                    );
+                }
+            }
+        }
+    }
 }

@@ -9,6 +9,22 @@ type SolidType = 'Tetrahedron' | 'Hexahedron' | 'Octahedron' | 'Dodecahedron' | 
 // Material IDs for the 5 textures (applied cyclically)
 const MATERIAL_IDS = ['mat0', 'mat1', 'mat2', 'mat3', 'mat4'];
 
+// Number of faces for each Platonic solid
+const FACE_COUNTS: Record<SolidType, number> = {
+  'Tetrahedron': 4,
+  'Hexahedron': 6,
+  'Octahedron': 8,
+  'Dodecahedron': 12,
+  'Icosahedron': 20,
+};
+
+/**
+ * Generates a cyclic material array for a given number of faces
+ */
+function getCyclicMaterials(faceCount: number): string[] {
+  return Array.from({ length: faceCount }, (_, i) => MATERIAL_IDS[i % MATERIAL_IDS.length]!);
+}
+
 /**
  * Creates a Three.js BufferGeometry from a WasmTriangularGeometry
  */
@@ -256,10 +272,13 @@ async function main() {
     wireframe: THREE.Group;
   } {
     // Create model object with Material.Array for cyclic texture assignment
-    // Pass the object directly to WASM - no JSON.stringify needed!
+    // Generate cyclic materials based on the number of faces
+    const faceCount = FACE_COUNTS[solidType];
+    const cyclicMaterials = getCyclicMaterials(faceCount);
+    
     const wasmMesh = create_platonic_solid({
       geometry: solidType,
-      material: { Array: MATERIAL_IDS }
+      material: { Array: cyclicMaterials }
     });
     
     // Create a group to hold meshes for each material

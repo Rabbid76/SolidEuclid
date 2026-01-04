@@ -79,10 +79,11 @@ impl Model {
                 .cloned()
                 .unwrap_or_else(|| default.clone()),
             Material::Array(arr) => {
-                if (face_index as usize) < arr.len() {
-                    arr[face_index as usize].clone()
-                } else {
+                if arr.is_empty() {
                     format!("material_{}", face_index)
+                } else {
+                    // Use cyclic indexing to reuse materials when there are more faces than materials
+                    arr[(face_index as usize) % arr.len()].clone()
                 }
             }
         }
@@ -933,6 +934,217 @@ mod tests {
                 "Icosahedron vertex not on unit sphere: {}",
                 length
             );
+        }
+    }
+
+    // Winding order tests for Platonic solids
+
+    mod winding_order_tests {
+        use super::*;
+
+        /// Helper function to calculate the winding order normal from polygon vertices.
+        /// Uses the cross product of the first two edges (right-hand rule).
+        /// Returns the calculated normal vector.
+        fn calculate_winding_normal(mesh: &PolygonMesh, polygon: &Polygon) -> DVec3 {
+            let indices = &polygon.indices;
+            assert!(indices.len() >= 3, "Polygon must have at least 3 vertices");
+
+            let p0 = mesh.vertices[indices[0] as usize].position;
+            let p1 = mesh.vertices[indices[1] as usize].position;
+            let p2 = mesh.vertices[indices[2] as usize].position;
+
+            let v1 = p1 - p0;
+            let v2 = p2 - p0;
+            v1.cross(v2).normalize()
+        }
+
+        /// Verifies that the winding order normal matches the stored polygon normal.
+        /// This ensures consistent CCW winding when viewed from the outside.
+        fn verify_winding_order_matches_normal(mesh: &PolygonMesh, solid_name: &str) {
+            for (face_idx, polygon) in mesh.polygons.iter().enumerate() {
+                let winding_normal = calculate_winding_normal(mesh, polygon);
+                let stored_normal = polygon.normal;
+
+                // The dot product should be positive (same direction)
+                let dot = winding_normal.dot(stored_normal);
+                assert!(
+                    dot > 0.99,
+                    "{} face {}: winding normal {:?} does not match stored normal {:?} (dot = {})",
+                    solid_name,
+                    face_idx,
+                    winding_normal,
+                    stored_normal,
+                    dot
+                );
+            }
+        }
+
+        /// Verifies that all face normals point outward from the centroid.
+        /// For convex solids centered at origin, the normal should point away from center.
+        fn verify_normals_point_outward(mesh: &PolygonMesh, solid_name: &str) {
+            for (face_idx, polygon) in mesh.polygons.iter().enumerate() {
+                // Calculate face centroid
+                let mut face_centroid = DVec3::ZERO;
+                for &idx in &polygon.indices {
+                    face_centroid += mesh.vertices[idx as usize].position;
+                }
+                face_centroid /= polygon.indices.len() as f64;
+
+                // The normal should point in the same direction as the centroid
+                // (for solids centered at origin)
+                let dot = polygon.normal.dot(face_centroid.normalize());
+                assert!(
+                    dot > 0.5,
+                    "{} face {}: normal {:?} does not point outward (centroid: {:?}, dot = {})",
+                    solid_name,
+                    face_idx,
+                    polygon.normal,
+                    face_centroid,
+                    dot
+                );
+            }
+        }
+
+        /// Verifies that the winding order produces an outward-pointing normal.
+        /// Combines both checks: winding order should produce normal pointing outward.
+        fn verify_winding_produces_outward_normal(mesh: &PolygonMesh, solid_name: &str) {
+            for (face_idx, polygon) in mesh.polygons.iter().enumerate() {
+                let winding_normal = calculate_winding_normal(mesh, polygon);
+
+                // Calculate face centroid
+                let mut face_centroid = DVec3::ZERO;
+                for &idx in &polygon.indices {
+                    face_centroid += mesh.vertices[idx as usize].position;
+                }
+                face_centroid /= polygon.indices.len() as f64;
+
+                // The winding normal should point in the same direction as the centroid
+                // (for solids centered at origin)
+                let dot = winding_normal.dot(face_centroid.normalize());
+                assert!(
+                    dot > 0.5,
+                    "{} face {}: winding produces inward normal (winding_normal: {:?}, centroid: {:?}, dot = {})",
+                    solid_name,
+                    face_idx,
+                    winding_normal,
+                    face_centroid,
+                    dot
+                );
+            }
+        }
+
+        #[test]
+        fn test_tetrahedron_winding_order() {
+            let model = Model::with_default_material(PlatonicSolid::Tetrahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            verify_winding_order_matches_normal(&mesh, "Tetrahedron");
+            verify_normals_point_outward(&mesh, "Tetrahedron");
+            verify_winding_produces_outward_normal(&mesh, "Tetrahedron");
+        }
+
+        #[test]
+        fn test_hexahedron_winding_order() {
+            let model = Model::with_default_material(PlatonicSolid::Hexahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            verify_winding_order_matches_normal(&mesh, "Hexahedron");
+            verify_normals_point_outward(&mesh, "Hexahedron");
+            verify_winding_produces_outward_normal(&mesh, "Hexahedron");
+        }
+
+        #[test]
+        fn test_octahedron_winding_order() {
+            let model = Model::with_default_material(PlatonicSolid::Octahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            verify_winding_order_matches_normal(&mesh, "Octahedron");
+            verify_normals_point_outward(&mesh, "Octahedron");
+            verify_winding_produces_outward_normal(&mesh, "Octahedron");
+        }
+
+        #[test]
+        fn test_dodecahedron_winding_order() {
+            let model = Model::with_default_material(PlatonicSolid::Dodecahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            verify_winding_order_matches_normal(&mesh, "Dodecahedron");
+            verify_normals_point_outward(&mesh, "Dodecahedron");
+            verify_winding_produces_outward_normal(&mesh, "Dodecahedron");
+        }
+
+        #[test]
+        fn test_icosahedron_winding_order() {
+            let model = Model::with_default_material(PlatonicSolid::Icosahedron);
+            let mesh = model.to_polygon_mesh().unwrap();
+
+            verify_winding_order_matches_normal(&mesh, "Icosahedron");
+            verify_normals_point_outward(&mesh, "Icosahedron");
+            verify_winding_produces_outward_normal(&mesh, "Icosahedron");
+        }
+
+        #[test]
+        fn test_all_platonic_solids_consistent_winding() {
+            let solids = [
+                (PlatonicSolid::Tetrahedron, "Tetrahedron"),
+                (PlatonicSolid::Hexahedron, "Hexahedron"),
+                (PlatonicSolid::Octahedron, "Octahedron"),
+                (PlatonicSolid::Dodecahedron, "Dodecahedron"),
+                (PlatonicSolid::Icosahedron, "Icosahedron"),
+            ];
+
+            for (solid, name) in solids {
+                let model = Model::with_default_material(solid);
+                let mesh = model.to_polygon_mesh().unwrap();
+
+                verify_winding_order_matches_normal(&mesh, name);
+                verify_normals_point_outward(&mesh, name);
+                verify_winding_produces_outward_normal(&mesh, name);
+            }
+        }
+
+        /// Debug test that prints detailed winding information for inspection
+        #[test]
+        fn test_print_winding_details() {
+            let solids = [
+                (PlatonicSolid::Tetrahedron, "Tetrahedron", 4),
+                (PlatonicSolid::Hexahedron, "Hexahedron", 6),
+                (PlatonicSolid::Octahedron, "Octahedron", 8),
+                (PlatonicSolid::Dodecahedron, "Dodecahedron", 12),
+                (PlatonicSolid::Icosahedron, "Icosahedron", 20),
+            ];
+
+            for (solid, name, expected_faces) in solids {
+                let model = Model::with_default_material(solid);
+                let mesh = model.to_polygon_mesh().unwrap();
+
+                println!("\n{} ({} faces):", name, expected_faces);
+                assert_eq!(mesh.polygons.len(), expected_faces);
+
+                for (face_idx, polygon) in mesh.polygons.iter().enumerate() {
+                    let winding_normal = calculate_winding_normal(&mesh, polygon);
+                    let stored_normal = polygon.normal;
+
+                    // Calculate face centroid
+                    let mut face_centroid = DVec3::ZERO;
+                    for &idx in &polygon.indices {
+                        face_centroid += mesh.vertices[idx as usize].position;
+                    }
+                    face_centroid /= polygon.indices.len() as f64;
+                    let outward_dir = face_centroid.normalize();
+
+                    let dot_stored_winding = winding_normal.dot(stored_normal);
+                    let dot_stored_outward = stored_normal.dot(outward_dir);
+                    let dot_winding_outward = winding_normal.dot(outward_dir);
+
+                    let status = if dot_winding_outward > 0.5 { "OK" } else { "WRONG" };
+
+                    println!(
+                        "  Face {}: winding·stored={:.3}, stored·outward={:.3}, winding·outward={:.3} [{}]",
+                        face_idx, dot_stored_winding, dot_stored_outward, dot_winding_outward, status
+                    );
+                }
+            }
         }
     }
 
