@@ -10,26 +10,6 @@ Checks: >
   portability-*,
   cert-*,
   misc-*,
-  -bugprone-easily-swappable-parameters,
-  -bugprone-reserved-identifier,
-  -cert-dcl37-c,
-  -cert-dcl51-cpp,
-  -cert-err58-cpp,
-  -cppcoreguidelines-avoid-do-while,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -cppcoreguidelines-pro-bounds-constant-array-index,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-  -cppcoreguidelines-pro-type-reinterpret-cast,
-  -misc-include-cleaner,
-  -misc-non-private-member-variables-in-classes,
-  -misc-use-anonymous-namespace,
-  -modernize-use-designated-initializers,
-  -modernize-use-nodiscard,
-  -modernize-use-trailing-return-type,
-  -readability-function-cognitive-complexity,
-  -readability-identifier-length,
-  -readability-magic-numbers,
-  -readability-math-missing-parentheses
 WarningsAsErrors: ''
 HeaderFilterRegex: '.*'
 FormatStyle: none
