@@ -16,6 +16,11 @@ async function main() {
               Platonic Solid
             </a>
           </li>
+          <li style="margin: 10px 0;">
+            <a href="./sphere/" style="color: #007acc; text-decoration: none; font-size: 18px;">
+              Sphere
+            </a>
+          </li>
         </ul>
       </nav>
     </div>

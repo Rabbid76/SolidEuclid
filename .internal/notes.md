@@ -2,17 +2,12 @@
 
 ## TODO
 
-- Platonic solids (no edges).
-- Triangular mesh SHA-256 + Platonic solids unit test
-- Platonic solid model with material IDs (enum for the default material for the mesh and map for the individual side material; array for the material per side).
-- Geometry model to polygon mesh trait.
-- Serialized JSON or JSON object to Platonic Solid.
-- Sphere geometries (slices, tessellation).
 - 2D polyline: 2D line segments with geometry ID and normal; vector and UV at start and end.
 - 2D shapes of moves, lines, arcs, NURBS, etc.
 - 2D polyline from 2D shape
-- Rotation bodies from closed and open 2D polyline
-- Extrude from closed and open 2D polyline
+- A rotation body or an extrude body can be created from two 2D polylines: one for the shape and one for the path.
+  - Rotation bodies from closed and open 2D polyline
+  - Extrude from closed and open 2D polyline
 - Cylinder and cone from a rotation body with edges encoded in a 2D polyline (e.g. for a capsule).
 - Caps for rotation bodies and extrusions
 - Top and bottom edges for rotation bodies and extrusions.

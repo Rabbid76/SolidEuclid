@@ -2,6 +2,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
+use crate::sphere::Model as SphereModel;
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -171,10 +172,76 @@ pub fn get_platonic_solid_types() -> js_sys::Array {
     arr
 }
 
+/// Creates a triangular mesh for a Sphere model from a JavaScript object.
+///
+/// # Arguments
+/// * `model` - A JavaScript object representing a `sphere::Model` with `geometry` and `material` fields.
+///
+/// # Example TypeScript
+/// ```typescript
+/// // UV Sphere (slices)
+/// const mesh = create_sphere({
+///   geometry: { Slices: { slices: 16, segments: 32 } },
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Cube-mapped sphere
+/// const mesh = create_sphere({
+///   geometry: { Cube: { segments: 8 } },
+///   material: { Array: ["mat0", "mat1", "mat2", "mat3", "mat4", "mat5"] }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_sphere(model: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let model: SphereModel = serde_wasm_bindgen::from_value(model)
+        .map_err(|e| JsError::new(&format!("Failed to parse sphere model: {}", e)))?;
+
+    let triangular_mesh = model
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create sphere mesh: {:?}", e)))?;
+
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    Ok(WasmTriangularMesh {
+        material_ids,
+        geometries,
+    })
+}
+
+/// Returns a list of available Sphere types.
+#[wasm_bindgen]
+pub fn get_sphere_types() -> js_sys::Array {
+    let arr = js_sys::Array::new();
+    arr.push(&JsValue::from_str("Slices"));
+    arr.push(&JsValue::from_str("Cube"));
+    arr
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platonic_solid::{Material, PlatonicSolid};
+    use crate::sphere::Sphere;
 
     #[test]
     fn test_hello_wasm() {
@@ -441,5 +508,270 @@ mod tests {
             .sum();
 
         assert_eq!(total_triangles, 12); // Hexahedron has 12 triangles total
+    }
+
+    // ==================== Sphere Tests ====================
+
+    // Helper to create a WasmTriangularMesh from a SphereModel directly for testing
+    fn create_mesh_from_sphere_model(model: SphereModel) -> WasmTriangularMesh {
+        let triangular_mesh = model.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_sphere_slices_uniform() {
+        let model = SphereModel::new(
+            Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        // Slices sphere: (slices * segments * 2) triangles (quads = 2 triangles each)
+        // Plus 2 * segments triangles for caps
+        // 8 slices * 16 segments * 2 = 256 triangles (for middle sections)
+        // Plus caps: 16 + 16 = 32 triangles
+        // But actually: (slices-1) * segments * 2 + 2 * segments for polar caps
+        // = 7 * 16 * 2 + 2 * 16 = 224 + 32 = 256
+        assert!(geometry.triangle_count() > 0);
+        assert!(geometry.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_sphere_slices_default_material() {
+        // Slices sphere has only 1 face, so default material results in 1 geometry
+        let model = SphereModel::new(
+            Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 1); // Slices sphere has 1 face
+    }
+
+    #[test]
+    fn test_create_sphere_cube_uniform() {
+        let model = SphereModel::new(
+            Sphere::Cube { segments: 4 },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 1);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        // Cube sphere: 6 faces * segments^2 * 2 triangles per quad
+        // = 6 * 16 * 2 = 192 triangles
+        assert_eq!(geometry.triangle_count(), 6 * 4 * 4 * 2);
+    }
+
+    #[test]
+    fn test_create_sphere_cube_array_6_materials() {
+        let materials = vec![
+            "mat0".to_string(),
+            "mat1".to_string(),
+            "mat2".to_string(),
+            "mat3".to_string(),
+            "mat4".to_string(),
+            "mat5".to_string(),
+        ];
+        let model = SphereModel::new(Sphere::Cube { segments: 4 }, Material::Array(materials));
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 6); // 6 faces, 6 different materials
+
+        // Each face should have segments^2 * 2 triangles
+        for i in 0..6 {
+            let geometry = mesh.get_geometry(i).unwrap();
+            assert_eq!(geometry.triangle_count(), 4 * 4 * 2); // 32 triangles per face
+        }
+    }
+
+    #[test]
+    fn test_create_sphere_cube_default_material() {
+        // Cube sphere has 6 faces, so default material results in 6 geometries
+        let model = SphereModel::new(Sphere::Cube { segments: 4 }, Material::Default);
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 6); // 6 faces, each with unique default material
+    }
+
+    #[test]
+    fn test_create_sphere_cube_cyclic_materials() {
+        // Using 3 materials cyclically for 6 faces should result in 3 geometries
+        let materials = vec![
+            "mat0".to_string(),
+            "mat1".to_string(),
+            "mat2".to_string(),
+            "mat0".to_string(),
+            "mat1".to_string(),
+            "mat2".to_string(),
+        ];
+        let model = SphereModel::new(Sphere::Cube { segments: 4 }, Material::Array(materials));
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 3); // 3 unique materials
+    }
+
+    #[test]
+    fn test_sphere_geometry_data_not_empty() {
+        let model = SphereModel::new(
+            Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_sphere_geometry_data_sizes_consistent() {
+        let model = SphereModel::new(
+            Sphere::Cube { segments: 4 },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        let geometry = mesh.get_geometry(0).unwrap();
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_sphere_normals_are_normalized() {
+        let model = SphereModel::new(
+            Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        let geometry = mesh.get_geometry(0).unwrap();
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+            assert!(
+                (length - 1.0).abs() < 0.001,
+                "Normal not normalized: length = {}",
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_sphere_indices_within_bounds() {
+        let model = SphereModel::new(
+            Sphere::Cube { segments: 4 },
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_sphere_cube_total_triangles() {
+        // Ensure total triangles across all geometries is correct for cube sphere
+        let materials = vec![
+            "m0".to_string(),
+            "m1".to_string(),
+            "m2".to_string(),
+            "m3".to_string(),
+            "m4".to_string(),
+            "m5".to_string(),
+        ];
+        let model = SphereModel::new(Sphere::Cube { segments: 4 }, Material::Array(materials));
+        let mesh = create_mesh_from_sphere_model(model);
+
+        let total_triangles: usize = (0..mesh.geometry_count())
+            .filter_map(|i| mesh.get_geometry(i))
+            .map(|g| g.triangle_count())
+            .sum();
+
+        // 6 faces * 4*4 quads * 2 triangles = 192 triangles
+        assert_eq!(total_triangles, 6 * 4 * 4 * 2);
+    }
+
+    #[test]
+    fn test_sphere_get_geometry_by_material() {
+        let materials = vec![
+            "mat_a".to_string(),
+            "mat_b".to_string(),
+            "mat_a".to_string(),
+            "mat_b".to_string(),
+            "mat_a".to_string(),
+            "mat_b".to_string(),
+        ];
+        let model = SphereModel::new(Sphere::Cube { segments: 4 }, Material::Array(materials));
+        let mesh = create_mesh_from_sphere_model(model);
+
+        let geometry_a = mesh.get_geometry_by_material("mat_a");
+        let geometry_b = mesh.get_geometry_by_material("mat_b");
+        let geometry_c = mesh.get_geometry_by_material("mat_c");
+
+        assert!(geometry_a.is_some());
+        assert!(geometry_b.is_some());
+        assert!(geometry_c.is_none());
+    }
+
+    #[test]
+    fn test_sphere_map_material() {
+        use std::collections::HashMap;
+        let mut face_map = HashMap::new();
+        face_map.insert(0, "special".to_string());
+        face_map.insert(2, "special".to_string());
+        let model = SphereModel::new(
+            Sphere::Cube { segments: 4 },
+            Material::Map {
+                default: "base".to_string(),
+                face_map,
+            },
+        );
+        let mesh = create_mesh_from_sphere_model(model);
+        assert_eq!(mesh.geometry_count(), 2); // "base" and "special"
     }
 }

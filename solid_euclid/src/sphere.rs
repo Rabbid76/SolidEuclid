@@ -103,9 +103,9 @@ impl Model {
                 let phi0 = 2.0 * PI * (segment as f64) / (segments as f64);
                 let phi1 = 2.0 * PI * ((segment + 1) as f64) / (segments as f64);
 
-                // u coordinates
-                let u0 = (segment as f64) / (segments as f64);
-                let u1 = ((segment + 1) as f64) / (segments as f64);
+                // u coordinates (reversed: 1 at segment 0, 0 at segment segments)
+                let u0 = 1.0 - (segment as f64) / (segments as f64);
+                let u1 = 1.0 - ((segment + 1) as f64) / (segments as f64);
 
                 // Calculate positions
                 let p00 = DVec3::new(r0 * phi0.cos(), y0, r0 * phi0.sin());
@@ -878,6 +878,235 @@ mod tests {
             set.insert(sphere3);
 
             assert_eq!(set.len(), 3);
+        }
+    }
+
+    // GeometryHash tests
+
+    mod geometry_hash_tests {
+        use super::*;
+        use crate::geometry_hash::GeometryHash;
+
+        #[test]
+        fn test_slices_sphere_polygon_mesh_hash() {
+            let model = Model::with_default_material(Sphere::Slices {
+                slices: 16,
+                segments: 32,
+            });
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Slices Sphere PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_cube_sphere_polygon_mesh_hash() {
+            let model = Model::with_default_material(Sphere::Cube { segments: 8 });
+            let mesh = model.to_polygon_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Cube Sphere PolygonMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_slices_sphere_triangular_mesh_hash() {
+            let model = Model::with_default_material(Sphere::Slices {
+                slices: 16,
+                segments: 32,
+            });
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Slices Sphere TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_cube_sphere_triangular_mesh_hash() {
+            let model = Model::with_default_material(Sphere::Cube { segments: 8 });
+            let mesh = model.to_triangular_mesh().unwrap();
+            let hash = mesh.geometry_hash();
+
+            assert!(hash.is_ok());
+            let hash_str = hash.unwrap();
+            assert_eq!(hash_str.len(), 64);
+            println!("Cube Sphere TriangularMesh hash: {}", hash_str);
+        }
+
+        #[test]
+        fn test_different_sphere_types_have_unique_polygon_mesh_hashes() {
+            let sphere_slices = Sphere::Slices {
+                slices: 16,
+                segments: 32,
+            };
+            let sphere_cube = Sphere::Cube { segments: 8 };
+
+            let model_slices = Model::with_default_material(sphere_slices);
+            let model_cube = Model::with_default_material(sphere_cube);
+
+            let hash_slices = model_slices
+                .to_polygon_mesh()
+                .unwrap()
+                .geometry_hash()
+                .unwrap();
+            let hash_cube = model_cube
+                .to_polygon_mesh()
+                .unwrap()
+                .geometry_hash()
+                .unwrap();
+
+            assert_ne!(
+                hash_slices, hash_cube,
+                "Slices and Cube sphere should have different hashes"
+            );
+        }
+
+        #[test]
+        fn test_different_sphere_types_have_unique_triangular_mesh_hashes() {
+            let sphere_slices = Sphere::Slices {
+                slices: 16,
+                segments: 32,
+            };
+            let sphere_cube = Sphere::Cube { segments: 8 };
+
+            let model_slices = Model::with_default_material(sphere_slices);
+            let model_cube = Model::with_default_material(sphere_cube);
+
+            let hash_slices = model_slices
+                .to_triangular_mesh()
+                .unwrap()
+                .geometry_hash()
+                .unwrap();
+            let hash_cube = model_cube
+                .to_triangular_mesh()
+                .unwrap()
+                .geometry_hash()
+                .unwrap();
+
+            assert_ne!(
+                hash_slices, hash_cube,
+                "Slices and Cube sphere should have different hashes"
+            );
+        }
+
+        #[test]
+        fn test_polygon_mesh_hash_is_deterministic_for_slices_sphere() {
+            let model = Model::with_default_material(Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            });
+
+            let mesh1 = model.to_polygon_mesh().unwrap();
+            let mesh2 = model.to_polygon_mesh().unwrap();
+
+            let hash1 = mesh1.geometry_hash().unwrap();
+            let hash2 = mesh2.geometry_hash().unwrap();
+
+            assert_eq!(hash1, hash2, "Hash not deterministic for Slices sphere");
+        }
+
+        #[test]
+        fn test_polygon_mesh_hash_is_deterministic_for_cube_sphere() {
+            let model = Model::with_default_material(Sphere::Cube { segments: 4 });
+
+            let mesh1 = model.to_polygon_mesh().unwrap();
+            let mesh2 = model.to_polygon_mesh().unwrap();
+
+            let hash1 = mesh1.geometry_hash().unwrap();
+            let hash2 = mesh2.geometry_hash().unwrap();
+
+            assert_eq!(hash1, hash2, "Hash not deterministic for Cube sphere");
+        }
+
+        #[test]
+        fn test_triangular_mesh_hash_is_deterministic_for_slices_sphere() {
+            let model = Model::with_default_material(Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            });
+
+            let mesh1 = model.to_triangular_mesh().unwrap();
+            let mesh2 = model.to_triangular_mesh().unwrap();
+
+            let hash1 = mesh1.geometry_hash().unwrap();
+            let hash2 = mesh2.geometry_hash().unwrap();
+
+            assert_eq!(hash1, hash2, "Hash not deterministic for Slices sphere");
+        }
+
+        #[test]
+        fn test_triangular_mesh_hash_is_deterministic_for_cube_sphere() {
+            let model = Model::with_default_material(Sphere::Cube { segments: 4 });
+
+            let mesh1 = model.to_triangular_mesh().unwrap();
+            let mesh2 = model.to_triangular_mesh().unwrap();
+
+            let hash1 = mesh1.geometry_hash().unwrap();
+            let hash2 = mesh2.geometry_hash().unwrap();
+
+            assert_eq!(hash1, hash2, "Hash not deterministic for Cube sphere");
+        }
+
+        #[test]
+        fn test_different_slice_counts_produce_different_hashes() {
+            let model1 = Model::with_default_material(Sphere::Slices {
+                slices: 8,
+                segments: 16,
+            });
+            let model2 = Model::with_default_material(Sphere::Slices {
+                slices: 16,
+                segments: 16,
+            });
+
+            let hash1 = model1.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+            let hash2 = model2.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+
+            assert_ne!(
+                hash1, hash2,
+                "Different slice counts should produce different hashes"
+            );
+        }
+
+        #[test]
+        fn test_different_segment_counts_produce_different_hashes() {
+            let model1 = Model::with_default_material(Sphere::Slices {
+                slices: 16,
+                segments: 16,
+            });
+            let model2 = Model::with_default_material(Sphere::Slices {
+                slices: 16,
+                segments: 32,
+            });
+
+            let hash1 = model1.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+            let hash2 = model2.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+
+            assert_ne!(
+                hash1, hash2,
+                "Different segment counts should produce different hashes"
+            );
+        }
+
+        #[test]
+        fn test_different_cube_sphere_segments_produce_different_hashes() {
+            let model1 = Model::with_default_material(Sphere::Cube { segments: 4 });
+            let model2 = Model::with_default_material(Sphere::Cube { segments: 8 });
+
+            let hash1 = model1.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+            let hash2 = model2.to_polygon_mesh().unwrap().geometry_hash().unwrap();
+
+            assert_ne!(
+                hash1, hash2,
+                "Different cube sphere segments should produce different hashes"
+            );
         }
     }
 }
