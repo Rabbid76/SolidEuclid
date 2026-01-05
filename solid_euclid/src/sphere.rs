@@ -899,7 +899,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Slices Sphere PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "9b15068744392880671f2697a7b477f33484f6a046df03f068e461a976feb8f5",
+                "Slices Sphere PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -911,7 +914,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Cube Sphere PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "fa687f2d9f122e9a1b39eed6e324f3609390930b55f70656b7864da547715852",
+                "Cube Sphere PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -926,7 +932,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Slices Sphere TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "1873f932f1678bb156cf6a375cdda668a62c0b4cd9e2b6d59f4aaa390fd43e1d",
+                "Slices Sphere TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -938,7 +947,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Cube Sphere TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "9962affa4f9d59006549a59ee270929410326970e11891fb4c5d612c7c95b70a",
+                "Cube Sphere TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]

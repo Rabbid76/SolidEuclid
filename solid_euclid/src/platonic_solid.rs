@@ -1076,7 +1076,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Tetrahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "77b747c47416ba1b72637baf9093d7c0ce6ab3c803367d4c2318863f72115d6d",
+                "Tetrahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1088,7 +1091,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Hexahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "397280f456609c2ea54e87787712773e5a87e1b5b2833c60b8836f51ab30a8d9",
+                "Hexahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1100,7 +1106,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Octahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "ea843daf76e25103440cb1ca901997f23d0aec752da886c673046226edb3106f",
+                "Octahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1112,7 +1121,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Dodecahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "705161e68e7cf62b9e9a625c65e2135adb71e22816f78744e9eceb037f4362e7",
+                "Dodecahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1124,7 +1136,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Icosahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "5f1c1166188f39684b86520ef8f6c558d1aab3c17fc3211aa6593da7062cea0d",
+                "Icosahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1136,7 +1151,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Tetrahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "877907b794879d9974b21b9470988f8b74c8602cf12eff89bb1c31861c700d0d",
+                "Tetrahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1148,7 +1166,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Hexahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "7a3651b4384e4a6814f0ea24662fa133c4584ab8ddd49cbd4c22d7110eabaf22",
+                "Hexahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1160,7 +1181,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Octahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "404d983ecd65ea0c836105aeea971a232f1becfec549edb3662f41bc8af1b40f",
+                "Octahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1172,7 +1196,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Dodecahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "e136fa4d590e9eafdceb378a2f39ba63798d0e2bdd2d5cfe96db675d7646379f",
+                "Dodecahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1184,7 +1211,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Icosahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "57f4da2f7ce4c5d419242638c77b7ea097c97fa81150bc195227c0a5bf75aa7e",
+                "Icosahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
