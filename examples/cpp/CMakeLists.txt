@@ -29,9 +29,9 @@ endif()
 
 # Create test executable
 add_executable(solid_euclid_tests
-    tests/test_main.cpp
-    tests/test_platonic_solid.cpp
-    tests/test_sphere.cpp
+    tests/test-main.cpp
+    tests/test-platonic-solid.cpp
+    tests/test-sphere.cpp
 )
 
 target_link_libraries(solid_euclid_tests PRIVATE solid_euclid)

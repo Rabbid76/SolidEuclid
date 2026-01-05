@@ -22,10 +22,8 @@ pub extern "C" fn hello_c() -> *mut c_char {
 /// The pointer must be a valid pointer returned by `hello_c`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hello_c_free(s: *mut c_char) {
-    unsafe {
-        if !s.is_null() {
-            let _ = CString::from_raw(s);
-        }
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
     }
 }
 
@@ -101,6 +99,12 @@ fn triangular_mesh_to_c(mesh: TriangularMesh) -> CTriangularMesh {
             let mut uvs = geometry.uvs.clone();
             let mut indices: Vec<u32> = geometry.indices.iter().map(|&i| i as u32).collect();
 
+            // Ensure capacity equals length before transferring ownership to C
+            vertices.shrink_to_fit();
+            normals.shrink_to_fit();
+            uvs.shrink_to_fit();
+            indices.shrink_to_fit();
+
             let vertices_len = vertices.len();
             let normals_len = normals.len();
             let uvs_len = uvs.len();
@@ -140,6 +144,8 @@ fn triangular_mesh_to_c(mesh: TriangularMesh) -> CTriangularMesh {
     let entries_ptr = if entries.is_empty() {
         std::ptr::null_mut()
     } else {
+        // Ensure capacity equals length before transferring ownership to C
+        entries.shrink_to_fit();
         let ptr = entries.as_mut_ptr();
         std::mem::forget(entries);
         ptr
@@ -199,11 +205,9 @@ pub unsafe extern "C" fn create_platonic_solid_c(model_json: *const c_char) -> C
         return create_error_mesh("Null JSON string provided");
     }
 
-    let json_str = unsafe {
-        match CStr::from_ptr(model_json).to_str() {
-            Ok(s) => s,
-            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
-        }
+    let json_str = match CStr::from_ptr(model_json).to_str() {
+        Ok(s) => s,
+        Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
     };
 
     let model: PlatonicSolidModel = match serde_json::from_str(json_str) {
@@ -268,11 +272,9 @@ pub unsafe extern "C" fn create_sphere_c(model_json: *const c_char) -> CTriangul
         return create_error_mesh("Null JSON string provided");
     }
 
-    let json_str = unsafe {
-        match CStr::from_ptr(model_json).to_str() {
-            Ok(s) => s,
-            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
-        }
+    let json_str = match CStr::from_ptr(model_json).to_str() {
+        Ok(s) => s,
+        Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
     };
 
     let model: SphereModel = match serde_json::from_str(json_str) {
@@ -311,36 +313,34 @@ pub extern "C" fn get_sphere_types_c() -> *mut c_char {
 /// After calling this function, the mesh pointer is invalid and must not be used.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn triangular_mesh_free(mesh: CTriangularMesh) {
-    unsafe {
-        // Free the error string if present
-        if !mesh.error.is_null() {
-            let _ = CString::from_raw(mesh.error);
-        }
+    // Free the error string if present
+    if !mesh.error.is_null() {
+        let _ = CString::from_raw(mesh.error);
+    }
 
-        // Free each entry
-        if !mesh.entries.is_null() && mesh.entries_len > 0 {
-            let entries = Vec::from_raw_parts(mesh.entries, mesh.entries_len, mesh.entries_len);
+    // Free each entry
+    if !mesh.entries.is_null() && mesh.entries_len > 0 {
+        let entries = Vec::from_raw_parts(mesh.entries, mesh.entries_len, mesh.entries_len);
 
-            for entry in entries {
-                // Free material ID string
-                if !entry.material_id.is_null() {
-                    let _ = CString::from_raw(entry.material_id);
-                }
+        for entry in entries {
+            // Free material ID string
+            if !entry.material_id.is_null() {
+                let _ = CString::from_raw(entry.material_id);
+            }
 
-                // Free geometry arrays
-                let geom = &entry.geometry;
-                if !geom.vertices.is_null() && geom.vertices_len > 0 {
-                    let _ = Vec::from_raw_parts(geom.vertices, geom.vertices_len, geom.vertices_len);
-                }
-                if !geom.normals.is_null() && geom.normals_len > 0 {
-                    let _ = Vec::from_raw_parts(geom.normals, geom.normals_len, geom.normals_len);
-                }
-                if !geom.uvs.is_null() && geom.uvs_len > 0 {
-                    let _ = Vec::from_raw_parts(geom.uvs, geom.uvs_len, geom.uvs_len);
-                }
-                if !geom.indices.is_null() && geom.indices_len > 0 {
-                    let _ = Vec::from_raw_parts(geom.indices, geom.indices_len, geom.indices_len);
-                }
+            // Free geometry arrays
+            let geom = &entry.geometry;
+            if !geom.vertices.is_null() && geom.vertices_len > 0 {
+                let _ = Vec::from_raw_parts(geom.vertices, geom.vertices_len, geom.vertices_len);
+            }
+            if !geom.normals.is_null() && geom.normals_len > 0 {
+                let _ = Vec::from_raw_parts(geom.normals, geom.normals_len, geom.normals_len);
+            }
+            if !geom.uvs.is_null() && geom.uvs_len > 0 {
+                let _ = Vec::from_raw_parts(geom.uvs, geom.uvs_len, geom.uvs_len);
+            }
+            if !geom.indices.is_null() && geom.indices_len > 0 {
+                let _ = Vec::from_raw_parts(geom.indices, geom.indices_len, geom.indices_len);
             }
         }
     }
@@ -352,10 +352,8 @@ pub unsafe extern "C" fn triangular_mesh_free(mesh: CTriangularMesh) {
 /// The pointer must be a valid pointer returned by one of the string-returning functions.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn string_free_c(s: *mut c_char) {
-    unsafe {
-        if !s.is_null() {
-            let _ = CString::from_raw(s);
-        }
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
     }
 }
 
