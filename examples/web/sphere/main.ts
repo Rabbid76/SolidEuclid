@@ -63,7 +63,7 @@ async function main() {
 
   // Create perspective camera
   const camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.set(2, 2, 2);
+  camera.position.set(1.5, 1.5, 1.5);
   camera.lookAt(0, 0, 0);
 
   // Create WebGPU renderer
@@ -135,7 +135,7 @@ async function main() {
   });
 
   // State
-  let currentConfig: SphereConfig = { type: 'Slices', slices: 16, segments: 32 };
+  let currentConfig: SphereConfig = { type: 'Cube', slices: 8, segments: 16 };
   let currentViewMode: ViewMode | null = null;
   let currentMergedGeometry: BufferGeometry | null = null;
   let solidGroup: Group | null = null;
@@ -266,7 +266,7 @@ async function main() {
   // Initialize with default wireframe UV sphere
   setSphereConfig(currentConfig);
   setViewMode('wireframe');
-  updateUIVisibility('Slices');
+  updateUIVisibility('Cube');
 
   // Setup menu event listeners
   const sphereTypeSelect = document.getElementById('sphereType') as HTMLSelectElement;
@@ -276,8 +276,8 @@ async function main() {
 
   function rebuildSphere() {
     const type = sphereTypeSelect.value as SphereType;
-    const slices = parseInt(slicesInput.value, 10) || 16;
-    const segments = parseInt(segmentsInput.value, 10) || 32;
+    const slices = parseInt(slicesInput.value, 10) || 8;
+    const segments = parseInt(segmentsInput.value, 10) || 16;
     setSphereConfig({ type, slices, segments });
   }
 
