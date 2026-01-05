@@ -4,8 +4,8 @@ BasedOnStyle: Google
 IndentWidth: 4
 ColumnLimit: 100
 AccessModifierOffset: -4
-AlignAfterOpenBracket: false
-AllowAllArgumentsOnNextLine: true
+AlignAfterOpenBracket: BlockIndent
+AllowAllArgumentsOnNextLine: false
 AllowAllParametersOfDeclarationOnNextLine: false
 AllowBreakBeforeNoexceptSpecifier: Always
 AllowShortBlocksOnASingle: Empty
@@ -15,7 +15,7 @@ AllowShortLambdasOnASingleLine: Empty
 AllowShortLoopsOnASingleLine: false
 AllowShortNamespacesOnASingleLine: false
 BinPackArguments: false
-BinPackParameters: OnePerLine
+BinPackParameters: false
 BreakBeforeTernaryOperators: true
 BreakBinaryOperations: RespectPrecedence
 BreakConstructorInitializers: BeforeComma
