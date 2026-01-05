@@ -24,7 +24,7 @@ import {
   mergeBufferGeometries,
 } from '../util/three_util';
 
-type ViewMode = 'solid' | 'wireframe';
+type ViewMode = 'geometry' | 'solid' | 'wireframe';
 type SolidType = 'Tetrahedron' | 'Hexahedron' | 'Octahedron' | 'Dodecahedron' | 'Icosahedron';
 
 // Material IDs for the 5 textures (applied cyclically)
@@ -117,6 +117,7 @@ async function main() {
   );
 
   // Create 5 MeshStandardMaterials with 50% diffuse (roughness controls this)
+  // polygonOffset is used to push the solid geometry slightly back to avoid z-fighting with wireframe
   const solidMaterials: Map<string, MeshStandardMaterial> = new Map();
   MATERIAL_IDS.forEach((id, index) => {
     solidMaterials.set(
@@ -125,6 +126,9 @@ async function main() {
         map: textures[index],
         roughness: 0.5,
         metalness: 0.0,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       })
     );
   });
@@ -214,28 +218,33 @@ async function main() {
     // Re-apply current view mode
     const prevMode = currentViewMode;
     currentViewMode = null; // Force update
-    setViewMode(prevMode ?? 'wireframe');
+    setViewMode(prevMode ?? 'geometry');
   }
 
   /**
-   * Updates the view mode (solid or wireframe)
+   * Updates the view mode (geometry, solid, or wireframe)
    */
   function setViewMode(mode: ViewMode) {
     if (mode === currentViewMode) return;
     currentViewMode = mode;
 
-    if (mode === 'solid') {
+    if (mode === 'geometry') {
+      // Show both solid and wireframe (wireframe on top)
+      if (solidGroup) scene.add(solidGroup);
+      if (wireframeGroup) scene.add(wireframeGroup);
+    } else if (mode === 'solid') {
       if (wireframeGroup) scene.remove(wireframeGroup);
       if (solidGroup) scene.add(solidGroup);
     } else {
+      // wireframe mode
       if (solidGroup) scene.remove(solidGroup);
       if (wireframeGroup) scene.add(wireframeGroup);
     }
   }
 
-  // Initialize with default wireframe Icosahedron
+  // Initialize with default geometry view (solid + wireframe) Icosahedron
   setSolidType('Icosahedron');
-  setViewMode('wireframe');
+  setViewMode('geometry');
 
   // Setup menu event listeners
   const solidTypeSelect = document.getElementById('solidType') as HTMLSelectElement;

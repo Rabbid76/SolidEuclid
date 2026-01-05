@@ -1,11 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import {
-  initSync,
-  create_platonic_solid,
-  get_platonic_solid_types,
-} from '@solid-euclid';
+import { initSync, create_platonic_solid, get_platonic_solid_types } from '@solid-euclid';
 
 describe('Platonic Solid WebAssembly API', () => {
   beforeAll(() => {
