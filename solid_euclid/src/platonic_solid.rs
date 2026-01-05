@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::geometry_error::GeometryError;
 use crate::geometry_model::GeometryModel;
+pub use crate::material::Material;
 use crate::polygon_mesh::{Polygon, PolygonMesh};
 use crate::vertex::Vertex;
 
@@ -22,22 +21,6 @@ pub enum PlatonicSolid {
     Dodecahedron,
     /// 20 triangular faces
     Icosahedron,
-}
-
-/// Represents material assignment strategies for geometry faces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Material {
-    /// Default material with no specific assignment
-    Default,
-    /// Uniform material applied to all faces
-    Uniform(String),
-    /// Material mapping with a default material and a map associating face indices to materials
-    Map {
-        default: String,
-        face_map: HashMap<i32, String>,
-    },
-    /// Array of materials, one per face
-    Array(Vec<String>),
 }
 
 /// A model combining a Platonic solid geometry with material assignment.
@@ -69,30 +52,10 @@ impl Model {
         }
     }
 
-    /// Gets the material name for a face index based on the material assignment.
-    fn get_material_for_face(&self, face_index: i32, _total_faces: i32) -> String {
-        match &self.material {
-            Material::Default => format!("material_{}", face_index),
-            Material::Uniform(name) => name.clone(),
-            Material::Map { default, face_map } => face_map
-                .get(&face_index)
-                .cloned()
-                .unwrap_or_else(|| default.clone()),
-            Material::Array(arr) => {
-                if arr.is_empty() {
-                    format!("material_{}", face_index)
-                } else {
-                    // Use cyclic indexing to reuse materials when there are more faces than materials
-                    arr[(face_index as usize) % arr.len()].clone()
-                }
-            }
-        }
-    }
-
     /// Sets up materials in the polygon mesh based on the material assignment.
     fn setup_materials(&self, mesh: &mut PolygonMesh, total_faces: i32) {
         for face_index in 0..total_faces {
-            let material_name = self.get_material_for_face(face_index, total_faces);
+            let material_name = self.material.get_material_for_face(face_index, total_faces);
             mesh.set_material(face_index, material_name);
         }
     }
@@ -445,6 +408,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_platonic_solid_enum_variants() {
@@ -469,57 +433,6 @@ mod tests {
 
         assert_eq!(original, cloned);
         assert_eq!(original, copied);
-    }
-
-    #[test]
-    fn test_material_default() {
-        let material = Material::Default;
-        assert_eq!(material, Material::Default);
-    }
-
-    #[test]
-    fn test_material_uniform() {
-        let material = Material::Uniform("red".to_string());
-        if let Material::Uniform(name) = material {
-            assert_eq!(name, "red");
-        } else {
-            panic!("Expected Material::Uniform");
-        }
-    }
-
-    #[test]
-    fn test_material_map() {
-        let mut face_map = HashMap::new();
-        face_map.insert(0, "front".to_string());
-        face_map.insert(1, "back".to_string());
-
-        let material = Material::Map {
-            default: "default".to_string(),
-            face_map,
-        };
-
-        if let Material::Map { default, face_map } = material {
-            assert_eq!(default, "default");
-            assert_eq!(face_map.get(&0), Some(&"front".to_string()));
-            assert_eq!(face_map.get(&1), Some(&"back".to_string()));
-        } else {
-            panic!("Expected Material::Map");
-        }
-    }
-
-    #[test]
-    fn test_material_array() {
-        let materials = vec!["red".to_string(), "green".to_string(), "blue".to_string()];
-        let material = Material::Array(materials.clone());
-
-        if let Material::Array(arr) = material {
-            assert_eq!(arr.len(), 3);
-            assert_eq!(arr[0], "red");
-            assert_eq!(arr[1], "green");
-            assert_eq!(arr[2], "blue");
-        } else {
-            panic!("Expected Material::Array");
-        }
     }
 
     #[test]
@@ -600,14 +513,6 @@ mod tests {
         let solid = PlatonicSolid::Tetrahedron;
         let debug_str = format!("{:?}", solid);
         assert_eq!(debug_str, "Tetrahedron");
-    }
-
-    #[test]
-    fn test_material_debug() {
-        let material = Material::Uniform("test".to_string());
-        let debug_str = format!("{:?}", material);
-        assert!(debug_str.contains("Uniform"));
-        assert!(debug_str.contains("test"));
     }
 
     #[test]
@@ -1171,7 +1076,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Tetrahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "77b747c47416ba1b72637baf9093d7c0ce6ab3c803367d4c2318863f72115d6d",
+                "Tetrahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1183,7 +1091,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Hexahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "397280f456609c2ea54e87787712773e5a87e1b5b2833c60b8836f51ab30a8d9",
+                "Hexahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1195,7 +1106,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Octahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "ea843daf76e25103440cb1ca901997f23d0aec752da886c673046226edb3106f",
+                "Octahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1207,7 +1121,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Dodecahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "705161e68e7cf62b9e9a625c65e2135adb71e22816f78744e9eceb037f4362e7",
+                "Dodecahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1219,7 +1136,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Icosahedron PolygonMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "5f1c1166188f39684b86520ef8f6c558d1aab3c17fc3211aa6593da7062cea0d",
+                "Icosahedron PolygonMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1231,7 +1151,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Tetrahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "877907b794879d9974b21b9470988f8b74c8602cf12eff89bb1c31861c700d0d",
+                "Tetrahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1243,7 +1166,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Hexahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "7a3651b4384e4a6814f0ea24662fa133c4584ab8ddd49cbd4c22d7110eabaf22",
+                "Hexahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1255,7 +1181,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Octahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "404d983ecd65ea0c836105aeea971a232f1becfec549edb3662f41bc8af1b40f",
+                "Octahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1267,7 +1196,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Dodecahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "e136fa4d590e9eafdceb378a2f39ba63798d0e2bdd2d5cfe96db675d7646379f",
+                "Dodecahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
@@ -1279,7 +1211,10 @@ mod tests {
             assert!(hash.is_ok());
             let hash_str = hash.unwrap();
             assert_eq!(hash_str.len(), 64);
-            println!("Icosahedron TriangularMesh hash: {}", hash_str);
+            assert_eq!(
+                hash_str, "57f4da2f7ce4c5d419242638c77b7ea097c97fa81150bc195227c0a5bf75aa7e",
+                "Icosahedron TriangularMesh hash changed - geometry may have been modified"
+            );
         }
 
         #[test]
