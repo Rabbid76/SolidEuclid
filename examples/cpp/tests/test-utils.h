@@ -53,12 +53,12 @@ private:
 };
 
 /// Helper to get vertex count from geometry.
-[[nodiscard]] constexpr auto vertex_count(const CTriangularGeometry& geom) noexcept {
+[[nodiscard]] constexpr auto vertex_count(const CTriangularGeometry& geom) noexcept -> std::size_t {
     return geom.vertices_len / 3;
 }
 
 /// Helper to get triangle count from geometry.
-[[nodiscard]] constexpr auto triangle_count(const CTriangularGeometry& geom) noexcept {
+[[nodiscard]] constexpr auto triangle_count(const CTriangularGeometry& geom) noexcept -> std::size_t {
     return geom.indices_len / 3;
 }
 
