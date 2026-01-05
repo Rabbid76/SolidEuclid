@@ -22,7 +22,7 @@ import {
   createWireframeEdges,
   getCyclicMaterials,
   mergeBufferGeometries,
-} from '../util/three_util';
+} from '../util/three-util';
 
 type ViewMode = 'geometry' | 'solid' | 'wireframe';
 type SphereType = 'Slices' | 'Cube';
