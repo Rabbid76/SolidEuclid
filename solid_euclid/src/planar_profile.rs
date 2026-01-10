@@ -136,6 +136,8 @@ struct ContourBuilder {
     current_pos: DVec2,
     /// The current tangent.
     current_tangent: DVec2,
+    /// The current distance along the contour.
+    current_distance: f64,
     /// The first point of the current contour.
     first_pos: Option<DVec2>,
     /// The first tangent of the current contour.
@@ -157,6 +159,7 @@ impl ContourBuilder {
         Self {
             current_pos: DVec2::ZERO,
             current_tangent: DVec2::X,
+            current_distance: 0.0,
             first_pos: None,
             first_tangent: None,
             segment_index: 0,
@@ -169,6 +172,7 @@ impl ContourBuilder {
 
     fn start_at(&mut self, pos: DVec2) {
         self.current_pos = pos;
+        self.current_distance = 0.0;
         self.first_pos = Some(pos);
         self.first_tangent = None;
         self.segment_index = 0;
@@ -184,11 +188,17 @@ impl ContourBuilder {
         start_tangent: DVec2,
         end_pos: DVec2,
         end_tangent: DVec2,
+        smooth_end: bool,
     ) {
+        let segment_length = (end_pos - start_pos).length();
+        let start_distance = self.current_distance;
+        let end_distance = start_distance + segment_length;
+
         let segment = Segment::new(
-            Point::new(start_pos, start_tangent),
-            Point::new(end_pos, end_tangent),
+            Point::new(start_pos, start_tangent, start_distance),
+            Point::new(end_pos, end_tangent, end_distance),
             self.segment_index,
+            smooth_end,
         );
         self.segments.push(segment);
 
@@ -199,6 +209,7 @@ impl ContourBuilder {
 
         self.current_pos = end_pos;
         self.current_tangent = end_tangent;
+        self.current_distance = end_distance;
     }
 
     fn next_segment(&mut self) {
@@ -585,6 +596,7 @@ impl SampleContour for PlanarProfile {
                                         pending_end_tangent,
                                         chamfer_end,
                                         chamfer_tangent,
+                                        false, // chamfer ends at corner, not smooth
                                     );
                                     builder.current_pos = chamfer_end;
                                 }
@@ -603,8 +615,13 @@ impl SampleContour for PlanarProfile {
                                         last_seg.end.position = fillet_segments[0].0;
                                     }
                                     builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
+                                    for (i, (s_start, s_start_t, s_end, s_end_t)) in
+                                        fillet_segments.iter().enumerate()
+                                    {
+                                        let is_smooth = i < fillet_segments.len() - 1;
+                                        builder.add_segment(
+                                            *s_start, *s_start_t, *s_end, *s_end_t, is_smooth,
+                                        );
                                     }
                                 }
                             }
@@ -612,7 +629,13 @@ impl SampleContour for PlanarProfile {
                     }
 
                     builder.next_segment();
-                    builder.add_segment(builder.current_pos, start_tangent, end, end_tangent);
+                    builder.add_segment(
+                        builder.current_pos,
+                        start_tangent,
+                        end,
+                        end_tangent,
+                        false,
+                    ); // line segment, corner follows
 
                     // Store corner for next command
                     builder.pending_corner = Some(cmd.corner);
@@ -674,6 +697,7 @@ impl SampleContour for PlanarProfile {
                                         pending_end_tangent,
                                         chamfer_end,
                                         chamfer_tangent,
+                                        false, // chamfer ends at corner
                                     );
                                     builder.current_pos = chamfer_end;
                                 }
@@ -691,8 +715,13 @@ impl SampleContour for PlanarProfile {
                                         last_seg.end.position = fillet_segments[0].0;
                                     }
                                     builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
+                                    for (i, (s_start, s_start_t, s_end, s_end_t)) in
+                                        fillet_segments.iter().enumerate()
+                                    {
+                                        let is_smooth = i < fillet_segments.len() - 1;
+                                        builder.add_segment(
+                                            *s_start, *s_start_t, *s_end, *s_end_t, is_smooth,
+                                        );
                                     }
                                 }
                             }
@@ -707,10 +736,11 @@ impl SampleContour for PlanarProfile {
                     let mut prev_pos = builder.current_pos;
                     let mut prev_tangent = start_tangent;
 
-                    for (pos, tangent) in ellipse_samples {
-                        builder.add_segment(prev_pos, prev_tangent, pos, tangent);
-                        prev_pos = pos;
-                        prev_tangent = tangent;
+                    for (i, (pos, tangent)) in ellipse_samples.iter().enumerate() {
+                        let is_smooth = i < ellipse_samples.len() - 1; // smooth within ellipse, not at last point
+                        builder.add_segment(prev_pos, prev_tangent, *pos, *tangent, is_smooth);
+                        prev_pos = *pos;
+                        prev_tangent = *tangent;
                     }
 
                     builder.pending_corner = Some(cmd.corner);
@@ -769,6 +799,7 @@ impl SampleContour for PlanarProfile {
                                         pending_end_tangent,
                                         chamfer_end,
                                         chamfer_tangent,
+                                        false, // chamfer ends at corner
                                     );
                                     builder.current_pos = chamfer_end;
                                 }
@@ -786,8 +817,13 @@ impl SampleContour for PlanarProfile {
                                         last_seg.end.position = fillet_segments[0].0;
                                     }
                                     builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
+                                    for (i, (s_start, s_start_t, s_end, s_end_t)) in
+                                        fillet_segments.iter().enumerate()
+                                    {
+                                        let is_smooth = i < fillet_segments.len() - 1;
+                                        builder.add_segment(
+                                            *s_start, *s_start_t, *s_end, *s_end_t, is_smooth,
+                                        );
                                     }
                                 }
                             }
@@ -802,10 +838,11 @@ impl SampleContour for PlanarProfile {
                         start_tangent
                     };
 
-                    for (pos, tangent) in nurbs_samples {
-                        builder.add_segment(prev_pos, prev_tangent, pos, tangent);
-                        prev_pos = pos;
-                        prev_tangent = tangent;
+                    for (i, (pos, tangent)) in nurbs_samples.iter().enumerate() {
+                        let is_smooth = i < nurbs_samples.len() - 1; // smooth within NURBS, not at last point
+                        builder.add_segment(prev_pos, prev_tangent, *pos, *tangent, is_smooth);
+                        prev_pos = *pos;
+                        prev_tangent = *tangent;
                     }
 
                     builder.pending_corner = Some(cmd.corner);
@@ -876,6 +913,7 @@ impl SampleContour for PlanarProfile {
                                     pending_end_tangent,
                                     chamfer_end,
                                     chamfer_tangent,
+                                    false, // closing chamfer ends at corner
                                 );
                                 // Update first segment start
                                 if let Some(first_seg) = builder.segments.first_mut() {
@@ -896,8 +934,13 @@ impl SampleContour for PlanarProfile {
                                     last_seg.end.position = fillet_segments[0].0;
                                 }
                                 builder.next_segment();
-                                for (s_start, s_start_t, s_end, s_end_t) in &fillet_segments {
-                                    builder.add_segment(*s_start, *s_start_t, *s_end, *s_end_t);
+                                for (i, (s_start, s_start_t, s_end, s_end_t)) in
+                                    fillet_segments.iter().enumerate()
+                                {
+                                    let is_smooth = i < fillet_segments.len() - 1;
+                                    builder.add_segment(
+                                        *s_start, *s_start_t, *s_end, *s_end_t, is_smooth,
+                                    );
                                 }
                                 // Update first segment start
                                 if let Some(last_fillet) = fillet_segments.last() {
