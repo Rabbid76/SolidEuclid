@@ -539,4 +539,135 @@ mod tests {
         let result = torus.sample_contour(0.1);
         assert!(result.is_ok());
     }
+
+    // ============================================================================
+    // Torus mesh and normal tests
+    // ============================================================================
+
+    #[test]
+    fn test_torus_to_polygon_mesh() {
+        let torus = Torus::new(2.0, 0.5, 12, 8, Material::Uniform("test".to_string()));
+
+        let result = torus.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+
+        let mesh = result.unwrap();
+        assert!(!mesh.is_empty());
+        assert!(mesh.polygon_count() > 0);
+        assert!(mesh.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_torus_normals_point_outward() {
+        use glam::DVec3;
+
+        // Create a torus centered at origin
+        let major_radius = 2.0;
+        let minor_radius = 0.5;
+        let torus = Torus::new(
+            major_radius,
+            minor_radius,
+            12,
+            8,
+            Material::Uniform("test".to_string()),
+        );
+
+        let mesh = torus.to_polygon_mesh().expect("Failed to create mesh");
+
+        // For each vertex, check that the normal points outward from the torus surface
+        for vertex in &mesh.vertices {
+            let pos = vertex.position;
+            let normal = vertex.normal;
+
+            // The torus is in the XY plane, centered at origin
+            // For each point, find the closest point on the major circle (the tube center)
+            let pos_xy = DVec3::new(pos.x, pos.y, 0.0);
+            let pos_xy_len = pos_xy.length();
+
+            if pos_xy_len > 1e-10 {
+                // Direction from origin to the point projected onto XY plane
+                let to_tube_center = pos_xy.normalize() * major_radius;
+
+                // Vector from tube center to the vertex (should be along minor radius direction)
+                let from_tube_center = pos - to_tube_center;
+                let from_tube_center_normalized = from_tube_center.normalize();
+
+                // The normal should point in the same general direction as from_tube_center
+                // (i.e., outward from the tube surface)
+                let dot = normal.dot(from_tube_center_normalized);
+
+                assert!(
+                    dot > 0.5, // Allow some tolerance for interpolation
+                    "Normal at position {:?} should point outward. Normal: {:?}, expected direction: {:?}, dot: {}",
+                    pos,
+                    normal,
+                    from_tube_center_normalized,
+                    dot
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_torus_normals_are_normalized() {
+        let torus = Torus::new(2.0, 0.5, 12, 8, Material::Uniform("test".to_string()));
+        let mesh = torus.to_polygon_mesh().expect("Failed to create mesh");
+
+        for vertex in &mesh.vertices {
+            let normal = vertex.normal;
+            let length = normal.length();
+
+            assert!(
+                (length - 1.0).abs() < 1e-6,
+                "Normal should be normalized, but length is {}",
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_torus_outer_edge_normals_point_away_from_center() {
+        use glam::DVec3;
+
+        // Create a torus and check that normals on the outer edge point away from the Z axis
+        let major_radius = 2.0;
+        let minor_radius = 0.5;
+        let torus = Torus::new(
+            major_radius,
+            minor_radius,
+            12,
+            8,
+            Material::Uniform("test".to_string()),
+        );
+
+        let mesh = torus.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Find vertices on the outer edge (distance from Z axis > major_radius)
+        let outer_threshold = major_radius + minor_radius * 0.5;
+
+        for vertex in &mesh.vertices {
+            let pos = vertex.position;
+            let normal = vertex.normal;
+
+            // Distance from Z axis in the XY plane
+            let dist_from_z_axis = (pos.x * pos.x + pos.y * pos.y).sqrt();
+
+            if dist_from_z_axis > outer_threshold {
+                // For outer edge vertices, the normal's XY component should point away from Z axis
+                let normal_xy = DVec3::new(normal.x, normal.y, 0.0);
+                let pos_xy = DVec3::new(pos.x, pos.y, 0.0).normalize();
+
+                if normal_xy.length() > 0.1 {
+                    let dot = normal_xy.normalize().dot(pos_xy);
+                    assert!(
+                        dot > 0.0,
+                        "Outer edge normal XY component should point away from center. Position: {:?}, Normal: {:?}, dot: {}",
+                        pos,
+                        normal,
+                        dot
+                    );
+                }
+            }
+        }
+    }
 }

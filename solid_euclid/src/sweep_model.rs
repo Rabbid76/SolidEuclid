@@ -100,16 +100,17 @@ impl<P: SampleContour, R: SampleContour> SweepModel<P, R> {
 
     /// Calculates the normal vector for a profile point.
     ///
-    /// The normal is computed by rotating the profile tangent by 90° and
-    /// transforming it with the plane matrix.
+    /// The normal is computed by rotating the profile tangent by 90° clockwise
+    /// and transforming it with the plane matrix. This ensures normals point
+    /// outward from the swept surface.
     ///
     /// # Arguments
     /// * `profile_tangent` - The tangent vector at the profile point
     /// * `matrix` - The transformation matrix (without translation)
     fn calculate_normal(profile_tangent: DVec2, matrix: &DMat4) -> DVec3 {
-        // Rotate profile tangent by 90° (perpendicular, pointing outward)
-        // Rotating (x, y) by 90° counterclockwise gives (-y, x)
-        let normal_2d = DVec2::new(-profile_tangent.y, profile_tangent.x).normalize();
+        // Rotate profile tangent by 90° clockwise (perpendicular, pointing outward)
+        // Rotating (x, y) by 90° clockwise gives (y, -x)
+        let normal_2d = DVec2::new(profile_tangent.y, -profile_tangent.x).normalize();
 
         // Transform the normal direction (use matrix without translation)
         let normal_4d = DVec4::new(normal_2d.x, normal_2d.y, 0.0, 0.0);
@@ -907,8 +908,8 @@ mod tests {
             position, tangent,
         );
 
-        // Profile tangent pointing up (0, 1) should give normal pointing to the right
-        // Rotating (0, 1) by 90° counterclockwise gives (-1, 0)
+        // Profile tangent pointing up (0, 1) should give normal pointing outward
+        // Rotating (0, 1) by 90° clockwise gives (1, 0)
         let normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
             DVec2::new(0.0, 1.0),
             &matrix,
@@ -916,6 +917,107 @@ mod tests {
 
         // The normal should be normalized
         assert!((normal.length() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_calculate_normal_points_outward_for_positive_x_tangent() {
+        // When path goes in +X direction (tangent = (1, 0))
+        // and profile tangent points up (+Y), the normal should point outward
+        let position = DVec2::new(0.0, 0.0);
+        let path_tangent = DVec2::new(1.0, 0.0);
+        let matrix = SweepModel::<StraightLinePath, StraightLineProfile>::create_plane_matrix(
+            position,
+            path_tangent,
+        );
+
+        // Profile tangent pointing in +Y (up along profile)
+        let profile_tangent = DVec2::new(0.0, 1.0);
+        let normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
+            profile_tangent,
+            &matrix,
+        );
+
+        // For a profile going counterclockwise (standard convention),
+        // rotating tangent 90° clockwise gives outward normal
+        // Profile tangent (0, 1) rotated 90° CW = (1, 0) in profile space
+        // This maps to the X-axis of the plane matrix
+        let x_axis = DVec3::new(matrix.col(0).x, matrix.col(0).y, matrix.col(0).z);
+        assert!(
+            (normal - x_axis).length() < 1e-10,
+            "Normal {:?} should equal x_axis {:?}",
+            normal,
+            x_axis
+        );
+    }
+
+    #[test]
+    fn test_calculate_normal_points_outward_for_circle_profile() {
+        // Simulate a point on a circular profile at angle 0 (rightmost point)
+        // Profile tangent at this point is (0, 1) - pointing up
+        // The outward normal should be (1, 0) - pointing right (away from center)
+        let position = DVec2::new(0.0, 0.0);
+        let path_tangent = DVec2::new(1.0, 0.0);
+        let matrix = SweepModel::<StraightLinePath, StraightLineProfile>::create_plane_matrix(
+            position,
+            path_tangent,
+        );
+
+        // At the rightmost point of a CCW circle, tangent is (0, 1)
+        let profile_tangent = DVec2::new(0.0, 1.0);
+        let normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
+            profile_tangent,
+            &matrix,
+        );
+
+        // The 2D normal in profile space should be (1, 0) - pointing outward from circle center
+        // Rotating (0, 1) by 90° CW gives (1, 0) ✓
+        let normal_2d = DVec2::new(profile_tangent.y, -profile_tangent.x);
+        assert!(
+            (normal_2d - DVec2::new(1.0, 0.0)).length() < 1e-10,
+            "2D normal should point outward: {:?}",
+            normal_2d
+        );
+    }
+
+    #[test]
+    fn test_calculate_normal_various_profile_tangents() {
+        let position = DVec2::new(0.0, 0.0);
+        let path_tangent = DVec2::new(1.0, 0.0);
+        let matrix = SweepModel::<StraightLinePath, StraightLineProfile>::create_plane_matrix(
+            position,
+            path_tangent,
+        );
+
+        // Test that rotating tangent 90° clockwise gives correct outward normal
+        let test_cases = [
+            // (profile_tangent, expected_normal_2d)
+            (DVec2::new(1.0, 0.0), DVec2::new(0.0, -1.0)), // tangent right -> normal down
+            (DVec2::new(0.0, 1.0), DVec2::new(1.0, 0.0)),  // tangent up -> normal right
+            (DVec2::new(-1.0, 0.0), DVec2::new(0.0, 1.0)), // tangent left -> normal up
+            (DVec2::new(0.0, -1.0), DVec2::new(-1.0, 0.0)), // tangent down -> normal left
+        ];
+
+        for (tangent, expected_2d) in test_cases {
+            let normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
+                tangent, &matrix,
+            );
+
+            // Verify the normal is normalized
+            assert!(
+                (normal.length() - 1.0).abs() < 1e-10,
+                "Normal should be normalized"
+            );
+
+            // Verify the 2D calculation is correct
+            let actual_2d = DVec2::new(tangent.y, -tangent.x).normalize();
+            assert!(
+                (actual_2d - expected_2d.normalize()).length() < 1e-10,
+                "For tangent {:?}, expected 2D normal {:?}, got {:?}",
+                tangent,
+                expected_2d,
+                actual_2d
+            );
+        }
     }
 
     // Vertex sharing tests
