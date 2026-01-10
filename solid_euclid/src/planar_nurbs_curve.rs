@@ -473,6 +473,9 @@ pub struct NurbsSegment {
     /// Indicates whether the transition from this segment to the successor segment is smooth.
     /// A smooth transition means the tangent is continuous at the junction point.
     pub smooth_end: bool,
+
+    /// The segment identifier used when sampling this segment into contour segments.
+    pub segment_id: u32,
 }
 
 impl NurbsSegment {
@@ -482,16 +485,18 @@ impl NurbsSegment {
     /// * `nurbs` - The NURBS curve for this segment
     /// * `start_distance` - Distance from contour start to segment start
     /// * `smooth_end` - Whether the transition to the next segment is smooth
+    /// * `segment_id` - The segment identifier used when sampling
     ///
     /// # Returns
     /// A new `NurbsSegment` with `end_distance` automatically calculated from the curve length
-    pub fn new(nurbs: Nurbs, start_distance: f64, smooth_end: bool) -> Self {
+    pub fn new(nurbs: Nurbs, start_distance: f64, smooth_end: bool, segment_id: u32) -> Self {
         let length = nurbs.length();
         Self {
             nurbs,
             start_distance,
             end_distance: start_distance + length,
             smooth_end,
+            segment_id,
         }
     }
 
@@ -502,17 +507,20 @@ impl NurbsSegment {
     /// * `start_distance` - Distance from contour start to segment start
     /// * `end_distance` - Distance from contour start to segment end
     /// * `smooth_end` - Whether the transition to the next segment is smooth
+    /// * `segment_id` - The segment identifier used when sampling
     pub fn with_distances(
         nurbs: Nurbs,
         start_distance: f64,
         end_distance: f64,
         smooth_end: bool,
+        segment_id: u32,
     ) -> Self {
         Self {
             nurbs,
             start_distance,
             end_distance,
             smooth_end,
+            segment_id,
         }
     }
 
@@ -575,6 +583,8 @@ impl NurbsSegment {
 pub struct Curve {
     /// The sequence of NURBS segments that make up this curve.
     pub segments: Vec<NurbsSegment>,
+    /// Whether this curve is closed (forms a loop).
+    pub closed: bool,
 }
 
 impl Curve {
@@ -582,6 +592,7 @@ impl Curve {
     pub fn new() -> Self {
         Self {
             segments: Vec::new(),
+            closed: false,
         }
     }
 
@@ -590,7 +601,34 @@ impl Curve {
     /// # Arguments
     /// * `segments` - The sequence of NURBS segments
     pub fn with_segments(segments: Vec<NurbsSegment>) -> Self {
-        Self { segments }
+        Self {
+            segments,
+            closed: false,
+        }
+    }
+
+    /// Creates a new closed curve with the given segments.
+    ///
+    /// # Arguments
+    /// * `segments` - The sequence of NURBS segments
+    pub fn with_segments_closed(segments: Vec<NurbsSegment>) -> Self {
+        Self {
+            segments,
+            closed: true,
+        }
+    }
+
+    /// Sets whether the curve is closed.
+    ///
+    /// # Arguments
+    /// * `closed` - Whether the curve forms a closed loop
+    pub fn set_closed(&mut self, closed: bool) {
+        self.closed = closed;
+    }
+
+    /// Returns whether the curve is closed.
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 
     /// Adds a NURBS curve as a new segment to the end of this curve.
@@ -603,8 +641,13 @@ impl Curve {
     /// * `smooth_end` - Whether the transition to the next segment should be smooth
     pub fn add_nurbs(&mut self, nurbs: Nurbs, smooth_end: bool) {
         let start_distance = self.total_length();
-        self.segments
-            .push(NurbsSegment::new(nurbs, start_distance, smooth_end));
+        let segment_id = self.segments.len() as u32;
+        self.segments.push(NurbsSegment::new(
+            nurbs,
+            start_distance,
+            smooth_end,
+            segment_id,
+        ));
     }
 
     /// Adds a pre-configured segment to the curve.
@@ -805,19 +848,22 @@ fn sample_curve_to_contour(curve: &Curve, sample_distance: f64) -> Result<Contou
         });
     }
 
-    if curve.is_empty() {
+    if curve.segments.is_empty() {
         return Ok(Contour::new());
     }
 
     let mut contour = Contour::new();
 
-    for (segment_id, nurbs_segment) in curve.segments.iter().enumerate() {
+    for nurbs_segment in curve.segments.iter() {
         let sampled_segments =
-            sample_nurbs_segment(nurbs_segment, sample_distance, segment_id as u32);
+            sample_nurbs_segment(nurbs_segment, sample_distance, nurbs_segment.segment_id);
         for segment in sampled_segments {
             contour.add_segment(segment);
         }
     }
+
+    // Propagate closed state from curve to contour
+    contour.set_closed(curve.closed);
 
     Ok(contour)
 }
@@ -1235,18 +1281,19 @@ mod tests {
     #[test]
     fn test_nurbs_segment_creation() {
         let nurbs = Nurbs::line(DVec2::ZERO, DVec2::new(10.0, 0.0));
-        let segment = NurbsSegment::new(nurbs, 5.0, true);
+        let segment = NurbsSegment::new(nurbs, 5.0, true, 0);
 
         assert_eq!(segment.start_distance, 5.0);
         assert_eq!(segment.end_distance, 15.0);
         assert_eq!(segment.length(), 10.0);
         assert!(segment.smooth_end);
+        assert_eq!(segment.segment_id, 0);
     }
 
     #[test]
     fn test_nurbs_segment_evaluate() {
         let nurbs = Nurbs::line(DVec2::ZERO, DVec2::new(10.0, 0.0));
-        let segment = NurbsSegment::new(nurbs, 0.0, false);
+        let segment = NurbsSegment::new(nurbs, 0.0, false, 0);
 
         let point = segment.evaluate_at_distance(5.0);
         assert!((point.x - 5.0).abs() < 1e-10);
@@ -1256,11 +1303,31 @@ mod tests {
     #[test]
     fn test_nurbs_segment_tangent() {
         let nurbs = Nurbs::line(DVec2::ZERO, DVec2::new(10.0, 0.0));
-        let segment = NurbsSegment::new(nurbs, 0.0, false);
+        let segment = NurbsSegment::new(nurbs, 0.0, false, 0);
 
         let tangent = segment.tangent_at_distance(5.0);
         assert!((tangent.x - 1.0).abs() < 1e-10);
         assert!((tangent.y - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_nurbs_segment_with_segment_id() {
+        let nurbs = Nurbs::line(DVec2::ZERO, DVec2::new(10.0, 0.0));
+        let segment = NurbsSegment::new(nurbs, 0.0, false, 42);
+
+        assert_eq!(segment.segment_id, 42);
+    }
+
+    #[test]
+    fn test_nurbs_segment_with_distances() {
+        let nurbs = Nurbs::line(DVec2::ZERO, DVec2::new(10.0, 0.0));
+        let segment = NurbsSegment::with_distances(nurbs, 5.0, 15.0, true, 7);
+
+        assert_eq!(segment.start_distance, 5.0);
+        assert_eq!(segment.end_distance, 15.0);
+        assert_eq!(segment.length(), 10.0);
+        assert!(segment.smooth_end);
+        assert_eq!(segment.segment_id, 7);
     }
 
     // Curve tests
