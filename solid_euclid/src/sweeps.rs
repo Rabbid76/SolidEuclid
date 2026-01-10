@@ -3,9 +3,11 @@
 //! This module provides geometric shapes that are defined by sweeping a profile along a path.
 
 use crate::geometry_error::GeometryError;
+use crate::geometry_model::GeometryModel;
 use crate::material::Material;
 use crate::planar_contour::{ContourSet, SampleContour};
 use crate::planar_profile::{Corner, PathCommand, PlanarProfile, ProfileCommand};
+use crate::polygon_mesh::PolygonMesh;
 use crate::sweep_model::SweepModel;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
@@ -127,6 +129,52 @@ impl Torus {
             profile_sample_distance,
             self.material.clone(),
         )
+    }
+}
+
+impl GeometryModel for Torus {
+    /// Converts the torus to a polygon mesh.
+    ///
+    /// This method creates a `SweepModel` from the torus parameters and
+    /// delegates to the sweep model's `to_polygon_mesh` implementation.
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the torus,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The major or minor radius is invalid (zero or negative)
+    /// - The segment counts are zero
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Validate parameters
+        if self.major_radius <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "major_radius".to_string(),
+                message: "Major radius must be positive".to_string(),
+            });
+        }
+        if self.minor_radius <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "minor_radius".to_string(),
+                message: "Minor radius must be positive".to_string(),
+            });
+        }
+        if self.major_segments == 0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "major_segments".to_string(),
+                message: "Major segments must be greater than zero".to_string(),
+            });
+        }
+        if self.minor_segments == 0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "minor_segments".to_string(),
+                message: "Minor segments must be greater than zero".to_string(),
+            });
+        }
+
+        let sweep_model = self.to_sweep_model();
+        sweep_model.to_polygon_mesh()
     }
 }
 

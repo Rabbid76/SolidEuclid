@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
+use crate::sweeps::Torus;
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -235,6 +236,63 @@ pub fn get_sphere_types() -> js_sys::Array {
     arr.push(&JsValue::from_str("Slices"));
     arr.push(&JsValue::from_str("Cube"));
     arr
+}
+
+/// Creates a triangular mesh for a Torus from a JavaScript object.
+///
+/// # Arguments
+/// * `torus` - A JavaScript object representing a `Torus` with the following fields:
+///   - `major_radius`: The distance from the center to the tube center (f64)
+///   - `minor_radius`: The radius of the tube (f64)
+///   - `major_segments`: Number of segments around the major circle (u32)
+///   - `minor_segments`: Number of segments around the minor circle (u32)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// const mesh = create_torus({
+///   major_radius: 2.0,
+///   minor_radius: 0.5,
+///   major_segments: 36,
+///   minor_segments: 18,
+///   material: { Uniform: "default" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_torus(torus: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let torus: Torus = serde_wasm_bindgen::from_value(torus)
+        .map_err(|e| JsError::new(&format!("Failed to parse torus: {}", e)))?;
+
+    let triangular_mesh = torus
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create torus mesh: {:?}", e)))?;
+
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    Ok(WasmTriangularMesh {
+        material_ids,
+        geometries,
+    })
 }
 
 #[cfg(test)]
@@ -773,5 +831,200 @@ mod tests {
         );
         let mesh = create_mesh_from_sphere_model(model);
         assert_eq!(mesh.geometry_count(), 2); // "base" and "special"
+    }
+
+    // ==================== Torus Tests ====================
+
+    // Helper to create a WasmTriangularMesh from a Torus directly for testing
+    fn create_mesh_from_torus(torus: Torus) -> WasmTriangularMesh {
+        let triangular_mesh = torus.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_torus_uniform_material() {
+        let torus = Torus::new(2.0, 0.5, 36, 18, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_default_material() {
+        let torus = Torus::new(2.0, 0.5, 12, 8, Material::Default);
+        let mesh = create_mesh_from_torus(torus);
+
+        // Torus with default material creates unique material per face
+        assert!(mesh.geometry_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_geometry_data_not_empty() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_torus_geometry_data_sizes_consistent() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_torus_normals_are_normalized() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+            assert!(
+                (length - 1.0).abs() < 0.001,
+                "Normal not normalized: length = {}",
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_torus_indices_within_bounds() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_torus_different_segment_counts() {
+        let low_res = Torus::new(2.0, 0.5, 8, 6, Material::Uniform("default".to_string()));
+        let high_res = Torus::new(2.0, 0.5, 48, 24, Material::Uniform("default".to_string()));
+
+        let low_mesh = create_mesh_from_torus(low_res);
+        let high_mesh = create_mesh_from_torus(high_res);
+
+        let low_geo = low_mesh.get_geometry(0).unwrap();
+        let high_geo = high_mesh.get_geometry(0).unwrap();
+
+        // Higher resolution should have more triangles
+        assert!(high_geo.triangle_count() > low_geo.triangle_count());
+    }
+
+    #[test]
+    fn test_create_torus_thin_ring() {
+        // Test a torus where minor radius is much smaller than major radius
+        let torus = Torus::new(10.0, 0.1, 48, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_fat_ring() {
+        // Test a torus where minor radius approaches major radius
+        let torus = Torus::new(1.0, 0.9, 24, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_get_geometry_by_material() {
+        let torus = Torus::new(
+            2.0,
+            0.5,
+            12,
+            8,
+            Material::Uniform("my_material".to_string()),
+        );
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_torus_triangle_count_relationship() {
+        // For a torus with m major segments and n minor segments,
+        // we should have approximately m * n * 2 triangles (2 triangles per quad)
+        let major_segs = 12u32;
+        let minor_segs = 8u32;
+        let torus = Torus::new(
+            2.0,
+            0.5,
+            major_segs,
+            minor_segs,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // The exact number depends on the sampling, but should be proportional
+        // to major_segments * minor_segments * 2
+        let expected_min = (major_segs * minor_segs * 2) as usize;
+        assert!(
+            geometry.triangle_count() >= expected_min / 2,
+            "Triangle count {} is too low (expected at least {})",
+            geometry.triangle_count(),
+            expected_min / 2
+        );
     }
 }
