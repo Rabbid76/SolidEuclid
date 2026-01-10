@@ -86,7 +86,7 @@ impl Torus {
     ///
     /// # Returns
     /// A `PlanarProfile` representing a circle in the XY plane centered at origin
-    fn create_circle_profile(radius: f64) -> PlanarProfile {
+    pub(crate) fn create_circle_profile(radius: f64) -> PlanarProfile {
         let center = DVec2::new(0.0, 0.0);
         let start = DVec2::new(radius, 0.0);
 
@@ -231,6 +231,239 @@ impl SampleContour for Torus {
         let path_sample_distance = major_circumference / self.major_segments as f64;
 
         sweep_model.path.sample_contour(path_sample_distance)
+    }
+}
+
+/// Represents a capsule (stadium of revolution) defined by radius and height.
+///
+/// A capsule is created by sweeping a capsule profile (quarter circle + line + quarter circle)
+/// along a circular path. The capsule is oriented along the Y-axis, with the center
+/// of the cylindrical body at the origin.
+///
+/// The capsule supports 3 material regions:
+/// - Face 0: Bottom hemisphere
+/// - Face 1: Cylindrical body
+/// - Face 2: Top hemisphere
+///
+/// # Example
+/// ```
+/// use solid_euclid::sweeps::Capsule;
+/// use solid_euclid::material::Material;
+///
+/// let capsule = Capsule::new(
+///     0.5,  // radius
+///     2.0,  // height (length of cylindrical body)
+///     24,   // segments
+///     Material::Default,
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Capsule {
+    /// The radius of the cylinder and hemispheres.
+    pub radius: f64,
+    /// The height (length) of the cylindrical body.
+    pub height: f64,
+    /// The number of segments for tessellation.
+    pub segments: u32,
+    /// The material assignment for the capsule surfaces.
+    pub material: Material,
+}
+
+impl Capsule {
+    /// Creates a new `Capsule` with the given parameters.
+    ///
+    /// # Arguments
+    /// * `radius` - The radius of the cylinder and hemispheres
+    /// * `height` - The length of the cylindrical body
+    /// * `segments` - The number of segments for tessellation
+    /// * `material` - The material assignment for the surfaces
+    ///
+    /// # Panics
+    /// This function does not panic, but invalid parameters will result in
+    /// errors when generating the mesh.
+    pub fn new(radius: f64, height: f64, segments: u32, material: Material) -> Self {
+        Self {
+            radius,
+            height,
+            segments,
+            material,
+        }
+    }
+
+    /// Creates a circular path profile (same as Torus).
+    ///
+    /// # Arguments
+    /// * `radius` - The radius of the circular path
+    fn create_circle_path(radius: f64) -> PlanarProfile {
+        Torus::create_circle_profile(radius)
+    }
+
+    /// Creates a `SweepModel` from this capsule.
+    ///
+    /// The sweep model uses:
+    /// - A circular path (the revolution around Y-axis)
+    /// - A capsule profile (quarter circle + line + quarter circle)
+    /// - Sample distances calculated from the geometry and segment count
+    ///
+    /// Note: The path is the major circle that creates the rotation around the axis.
+    /// The profile X coordinate represents the radial distance from the axis,
+    /// and profile Y coordinate represents the height along the axis.
+    ///
+    /// # Returns
+    /// A `SweepModel` that can be used to generate the capsule geometry
+    fn to_sweep_model(&self) -> SweepModel<PlanarProfile, PlanarProfile> {
+        let half_height = self.height / 2.0;
+
+        // The path creates the revolution around the Y-axis
+        // We use the capsule radius for the path, but the profile will be
+        // adjusted so that X=0 is at the axis (profile X is offset)
+        let path = Self::create_circle_path(self.radius);
+
+        // Profile is the capsule cross-section, but we need to offset it
+        // so that the axis of revolution is at the path's center
+        // Profile X will be relative to the path center, so X=0 in profile
+        // maps to X=path_radius in 3D
+        let profile = Self::create_capsule_profile_offset(self.radius, half_height);
+
+        // Calculate sample distances
+        let path_circumference = 2.0 * PI * self.radius;
+        let path_sample_distance = path_circumference / self.segments as f64;
+
+        // Profile length: quarter circle + line + quarter circle
+        // = (PI/2 * radius) + height + (PI/2 * radius) = PI * radius + height
+        let profile_length = PI * self.radius + self.height;
+        let profile_segments = self.segments / 2;
+        let profile_sample_distance = profile_length / profile_segments.max(1) as f64;
+
+        SweepModel::new(
+            path,
+            profile,
+            path_sample_distance,
+            profile_sample_distance,
+            self.material.clone(),
+        )
+    }
+
+    /// Creates the capsule profile with offset for sweep model.
+    ///
+    /// The profile is offset so that X=0 in profile space corresponds to X=0 in 3D
+    /// (the axis of revolution). Since the path has radius=capsule_radius,
+    /// profile X values are offset by -radius.
+    ///
+    /// # Arguments
+    /// * `radius` - The radius of the hemispheres
+    /// * `half_height` - Half the height of the cylindrical body
+    fn create_capsule_profile_offset(radius: f64, half_height: f64) -> PlanarProfile {
+        // Profile coordinates in sweep model:
+        // - Profile X maps to radial direction from path center
+        // - Profile Y maps to perpendicular direction (Y-axis in 3D)
+        //
+        // Since path has radius R, and we want:
+        // - Capsule axis at world origin (radial=0)
+        // - Capsule surface at radial=R
+        //
+        // We need profile X to go from -R (at axis) to 0 (at surface)
+        // This is because final radial = path_radius + profile_x = R + (-R to 0) = 0 to R
+
+        let bottom_pole = DVec2::new(-radius, -half_height - radius);
+        let bottom_equator = DVec2::new(0.0, -half_height);
+        let top_equator = DVec2::new(0.0, half_height);
+        let top_pole = DVec2::new(-radius, half_height + radius);
+
+        // Centers for the quarter circles (on the axis, which is at X=-radius in profile space)
+        let bottom_center = DVec2::new(-radius, -half_height);
+        let top_center = DVec2::new(-radius, half_height);
+
+        PlanarProfile::with_commands(vec![
+            // Start at bottom pole (on the axis)
+            ProfileCommand::new(PathCommand::Move { point: bottom_pole }, Corner::Edge),
+            // Bottom quarter circle (from bottom pole to bottom equator/surface)
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: bottom_equator,
+                    center: bottom_center,
+                },
+                Corner::SmoothEdge,
+            ),
+            // Line up the cylinder body (along the surface)
+            ProfileCommand::new(PathCommand::Line { point: top_equator }, Corner::SmoothEdge),
+            // Top quarter circle (from top equator/surface to top pole on axis)
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: top_pole,
+                    center: top_center,
+                },
+                Corner::Edge,
+            ),
+        ])
+    }
+}
+
+impl GeometryModel for Capsule {
+    /// Converts the capsule to a polygon mesh.
+    ///
+    /// This method creates a `SweepModel` from the capsule parameters and
+    /// delegates to the sweep model's `to_polygon_mesh` implementation.
+    /// After mesh generation, the geometry IDs are remapped to support
+    /// 3 material regions: bottom hemisphere (0), body (1), top hemisphere (2).
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the capsule,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The radius is invalid (zero or negative)
+    /// - The height is negative
+    /// - The segment count is less than 3
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Validate parameters
+        if self.radius <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "radius".to_string(),
+                message: "Radius must be positive".to_string(),
+            });
+        }
+        if self.height < 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "height".to_string(),
+                message: "Height must be non-negative".to_string(),
+            });
+        }
+        if self.segments < 3 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "segments".to_string(),
+                message: "Segments must be at least 3".to_string(),
+            });
+        }
+
+        let sweep_model = self.to_sweep_model();
+        let mut mesh = sweep_model.to_polygon_mesh()?;
+
+        // Remap geometry IDs based on profile segment:
+        // Segment 0 (bottom quarter circle) -> geometry_id 0
+        // Segment 1 (cylinder body line) -> geometry_id 1
+        // Segment 2 (top quarter circle) -> geometry_id 2
+        for polygon in &mut mesh.polygons {
+            // The sweep model assigns geometry_id based on profile segment
+            // We need to map these to our 3 regions
+            let segment_id = polygon.geometry_id;
+            polygon.geometry_id = match segment_id {
+                0 => 0, // Bottom hemisphere
+                1 => 1, // Body
+                2 => 2, // Top hemisphere
+                _ => segment_id % 3,
+            };
+        }
+
+        // Update material map for the 3 regions
+        mesh.material_map.clear();
+        for face_index in 0..3 {
+            let material_name = self.material.get_material_for_face(face_index, 3);
+            mesh.set_material(face_index, material_name);
+        }
+
+        Ok(mesh)
     }
 }
 
@@ -669,5 +902,257 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ============================================================================
+    // Capsule construction tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_new() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Default);
+
+        assert_eq!(capsule.radius, 0.5);
+        assert_eq!(capsule.height, 2.0);
+        assert_eq!(capsule.segments, 24);
+        assert_eq!(capsule.material, Material::Default);
+    }
+
+    #[test]
+    fn test_capsule_with_uniform_material() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Uniform("gold".to_string()));
+
+        assert_eq!(capsule.radius, 0.5);
+        assert_eq!(capsule.height, 2.0);
+        if let Material::Uniform(name) = &capsule.material {
+            assert_eq!(name, "gold");
+        } else {
+            panic!("Expected Material::Uniform");
+        }
+    }
+
+    #[test]
+    fn test_capsule_clone() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Default);
+        let cloned = capsule.clone();
+
+        assert_eq!(capsule, cloned);
+    }
+
+    // ============================================================================
+    // Capsule serialization tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_serialize_deserialize() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Default);
+
+        let json = serde_json::to_string(&capsule).expect("Failed to serialize");
+        let deserialized: Capsule = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(capsule, deserialized);
+    }
+
+    #[test]
+    fn test_capsule_serialize_with_uniform_material() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Uniform("copper".to_string()));
+
+        let json = serde_json::to_string(&capsule).expect("Failed to serialize");
+        let deserialized: Capsule = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(capsule, deserialized);
+    }
+
+    #[test]
+    fn test_capsule_json_format() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Default);
+        let json = serde_json::to_string_pretty(&capsule).expect("Failed to serialize");
+
+        assert!(json.contains("radius"));
+        assert!(json.contains("height"));
+        assert!(json.contains("segments"));
+        assert!(json.contains("material"));
+    }
+
+    // ============================================================================
+    // Capsule mesh generation tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_to_polygon_mesh() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("test".to_string()));
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+
+        let mesh = result.unwrap();
+        assert!(!mesh.is_empty());
+        assert!(mesh.polygon_count() > 0);
+        assert!(mesh.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_capsule_with_zero_height() {
+        // A capsule with zero height is just a sphere
+        let capsule = Capsule::new(0.5, 0.0, 12, Material::Default);
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_capsule_has_three_material_regions() {
+        let capsule = Capsule::new(
+            0.5,
+            2.0,
+            12,
+            Material::Array(vec![
+                "bottom".to_string(),
+                "body".to_string(),
+                "top".to_string(),
+            ]),
+        );
+
+        let mesh = capsule.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Check that we have 3 materials
+        assert_eq!(mesh.material_map.len(), 3);
+        assert_eq!(mesh.get_material(0), Some(&"bottom".to_string()));
+        assert_eq!(mesh.get_material(1), Some(&"body".to_string()));
+        assert_eq!(mesh.get_material(2), Some(&"top".to_string()));
+    }
+
+    #[test]
+    fn test_capsule_default_material_creates_three_regions() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Default);
+
+        let mesh = capsule.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Default material should create 3 unique materials
+        assert_eq!(mesh.material_map.len(), 3);
+        assert_eq!(mesh.get_material(0), Some(&"material_0".to_string()));
+        assert_eq!(mesh.get_material(1), Some(&"material_1".to_string()));
+        assert_eq!(mesh.get_material(2), Some(&"material_2".to_string()));
+    }
+
+    #[test]
+    fn test_capsule_normals_are_normalized() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Default);
+        let mesh = capsule.to_polygon_mesh().expect("Failed to create mesh");
+
+        for vertex in &mesh.vertices {
+            let normal = vertex.normal;
+            let length = normal.length();
+
+            assert!(
+                (length - 1.0).abs() < 1e-6,
+                "Normal should be normalized, but length is {}",
+                length
+            );
+        }
+    }
+
+    // ============================================================================
+    // Capsule error handling tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_zero_radius() {
+        let capsule = Capsule::new(0.0, 2.0, 24, Material::Default);
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "radius");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_capsule_negative_radius() {
+        let capsule = Capsule::new(-0.5, 2.0, 24, Material::Default);
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "radius");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_capsule_negative_height() {
+        let capsule = Capsule::new(0.5, -2.0, 24, Material::Default);
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "height");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_capsule_insufficient_segments() {
+        let capsule = Capsule::new(0.5, 2.0, 2, Material::Default);
+
+        let result = capsule.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "segments");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    // ============================================================================
+    // Capsule sweep model tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_to_sweep_model() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Default);
+        let sweep_model = capsule.to_sweep_model();
+
+        // Verify the material is preserved
+        assert_eq!(sweep_model.material, Material::Default);
+    }
+
+    #[test]
+    fn test_capsule_to_sweep_model_material_preserved() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Uniform("test_material".to_string()));
+        let sweep_model = capsule.to_sweep_model();
+
+        assert_eq!(
+            sweep_model.material,
+            Material::Uniform("test_material".to_string())
+        );
+    }
+
+    // ============================================================================
+    // Capsule profile tests
+    // ============================================================================
+
+    #[test]
+    fn test_capsule_profile_has_four_commands() {
+        let profile = Capsule::create_capsule_profile_offset(0.5, 1.0);
+
+        // Profile should have: Move, Ellipse (bottom), Line, Ellipse (top)
+        assert_eq!(profile.len(), 4);
+    }
+
+    #[test]
+    fn test_capsule_profile_zero_height() {
+        // With zero height, we still have the profile but line has zero length
+        let profile = Capsule::create_capsule_profile_offset(0.5, 0.0);
+
+        assert_eq!(profile.len(), 4);
     }
 }

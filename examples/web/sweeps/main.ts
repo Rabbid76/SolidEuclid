@@ -16,7 +16,7 @@ import {
 } from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import init, { create_torus, WasmTriangularMesh } from '@solid-euclid';
+import init, { create_torus, create_capsule, WasmTriangularMesh } from '@solid-euclid';
 import {
   createBufferGeometryFromWasm,
   createVertexNormals,
@@ -25,10 +25,13 @@ import {
 } from '../util/three-util';
 
 type ViewMode = 'geometry' | 'solid' | 'wireframe';
-type SweepType = 'Torus';
+type SweepType = 'Torus' | 'Capsule';
 
-// Material ID for uniform material
+// Material ID for uniform material (torus)
 const MATERIAL_ID = 'default';
+
+// Material IDs for capsule (3 regions)
+const CAPSULE_MATERIALS = ['bottom', 'body', 'top'];
 
 interface TorusConfig {
   majorRadius: number;
@@ -37,9 +40,16 @@ interface TorusConfig {
   minorSegments: number;
 }
 
+interface CapsuleConfig {
+  radius: number;
+  height: number;
+  segments: number;
+}
+
 interface SweepConfig {
   type: SweepType;
   torus: TorusConfig;
+  capsule: CapsuleConfig;
 }
 
 async function main() {
@@ -92,31 +102,58 @@ async function main() {
   const axesHelper = new AxesHelper(2);
   scene.add(axesHelper);
 
-  // Load texture for uniform material
+  // Load textures for materials (like platonic_solid example)
   const textureLoader = new TextureLoader();
-  const texture = await new Promise<Texture>((resolve, reject) => {
-    textureLoader.load(
-      '../assets/512x512 Texel Density Texture 1.png',
-      (tex: Texture) => {
-        tex.colorSpace = SRGBColorSpace;
-        tex.wrapS = RepeatWrapping;
-        tex.wrapT = RepeatWrapping;
-        resolve(tex);
-      },
-      undefined,
-      reject
-    );
-  });
+  const textureFiles = [
+    '../assets/512x512 Texel Density Texture 1.png',
+    '../assets/512x512 Texel Density Texture 2.png',
+    '../assets/512x512 Texel Density Texture 3.png',
+  ];
+
+  const textures = await Promise.all(
+    textureFiles.map(
+      (file) =>
+        new Promise<Texture>((resolve, reject) => {
+          textureLoader.load(
+            file,
+            (tex: Texture) => {
+              tex.colorSpace = SRGBColorSpace;
+              tex.wrapS = RepeatWrapping;
+              tex.wrapT = RepeatWrapping;
+              resolve(tex);
+            },
+            undefined,
+            reject
+          );
+        })
+    )
+  );
 
   // Create MeshStandardMaterial with 50% diffuse (roughness controls this)
   // polygonOffset is used to push the solid geometry slightly back to avoid z-fighting with wireframe
   const solidMaterial = new MeshStandardMaterial({
-    map: texture,
+    map: textures[0],
     roughness: 0.5,
     metalness: 0.0,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
+  });
+
+  // Create materials for capsule using textures (3 different textures for bottom, body, top)
+  const capsuleMaterials: Map<string, MeshStandardMaterial> = new Map();
+  CAPSULE_MATERIALS.forEach((id, index) => {
+    capsuleMaterials.set(
+      id,
+      new MeshStandardMaterial({
+        map: textures[index],
+        roughness: 0.5,
+        metalness: 0.0,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      })
+    );
   });
 
   // State
@@ -127,6 +164,11 @@ async function main() {
       minorRadius: 0.3,
       majorSegments: 36,
       minorSegments: 18,
+    },
+    capsule: {
+      radius: 0.3,
+      height: 1.0,
+      segments: 24,
     },
   };
   let currentViewMode: ViewMode | null = null;
@@ -152,8 +194,6 @@ async function main() {
 
     // Create a group to hold meshes
     const meshGroup = new Group();
-    // Rotate the torus 90° around the x-axis so it lies flat
-    meshGroup.rotation.x = -Math.PI / 2;
     const geometries: BufferGeometry[] = [];
 
     // Create a mesh for each material in the mesh
@@ -174,7 +214,59 @@ async function main() {
     // Create wireframe visualization group
     const wireframe = new Group();
     // Rotate the wireframe 90° around the x-axis to match the solid
-    wireframe.rotation.x = -Math.PI / 2;
+    const wireframeEdges = createWireframeEdges(mergedGeometry);
+    wireframe.add(wireframeEdges);
+    const vertexNormals = createVertexNormals(mergedGeometry, 0.1);
+    wireframe.add(vertexNormals);
+
+    return { mergedGeometry, meshGroup, wireframe };
+  }
+
+  /**
+   * Creates the geometry and mesh objects for a capsule
+   */
+  function createCapsuleObjects(config: CapsuleConfig): {
+    mergedGeometry: BufferGeometry;
+    meshGroup: Group;
+    wireframe: Group;
+  } {
+    // Create capsule with Array material to get 3 separate geometry groups
+    const wasmMesh: WasmTriangularMesh = create_capsule({
+      radius: config.radius,
+      height: config.height,
+      segments: config.segments,
+      material: {
+        Array: CAPSULE_MATERIALS,
+      },
+    });
+
+    // Create a group to hold meshes
+    const meshGroup = new Group();
+    const geometries: BufferGeometry[] = [];
+
+    // Create a mesh for each material in the mesh (bottom, body, top)
+    const materialIds = wasmMesh.material_ids as string[];
+    for (let i = 0; i < wasmMesh.geometry_count; i++) {
+      const wasmGeometry = wasmMesh.get_geometry(i);
+      if (wasmGeometry) {
+        const geometry = createBufferGeometryFromWasm(wasmGeometry);
+        geometries.push(geometry);
+
+        // Select material based on material ID
+        const materialId = materialIds[i] ?? '';
+        const material = capsuleMaterials.get(materialId) ?? solidMaterial;
+
+        const mesh = new Mesh(geometry, material);
+        meshGroup.add(mesh);
+      }
+    }
+
+    // Create merged geometry for wireframe visualization
+    const mergedGeometry = mergeBufferGeometries(geometries);
+
+    // Create wireframe visualization group
+    const wireframe = new Group();
+    // Rotate the wireframe 90° around the x-axis to match the solid
     const wireframeEdges = createWireframeEdges(mergedGeometry);
     wireframe.add(wireframeEdges);
     const vertexNormals = createVertexNormals(mergedGeometry, 0.1);
@@ -194,6 +286,8 @@ async function main() {
     switch (config.type) {
       case 'Torus':
         return createTorusObjects(config.torus);
+      case 'Capsule':
+        return createCapsuleObjects(config.capsule);
       default:
         throw new Error(`Unknown sweep type: ${config.type}`);
     }
@@ -210,6 +304,13 @@ async function main() {
         a.torus.minorRadius === b.torus.minorRadius &&
         a.torus.majorSegments === b.torus.majorSegments &&
         a.torus.minorSegments === b.torus.minorSegments
+      );
+    }
+    if (a.type === 'Capsule' && b.type === 'Capsule') {
+      return (
+        a.capsule.radius === b.capsule.radius &&
+        a.capsule.height === b.capsule.height &&
+        a.capsule.segments === b.capsule.segments
       );
     }
     return true;
@@ -238,6 +339,7 @@ async function main() {
     currentConfig = {
       type: config.type,
       torus: { ...config.torus },
+      capsule: { ...config.capsule },
     };
 
     // Re-apply current view mode
@@ -272,8 +374,12 @@ async function main() {
    */
   function updateUIVisibility(sweepType: SweepType) {
     const torusOptions = document.getElementById('torusOptions');
+    const capsuleOptions = document.getElementById('capsuleOptions');
     if (torusOptions) {
       torusOptions.style.display = sweepType === 'Torus' ? 'flex' : 'none';
+    }
+    if (capsuleOptions) {
+      capsuleOptions.style.display = sweepType === 'Capsule' ? 'flex' : 'none';
     }
   }
 
@@ -288,6 +394,9 @@ async function main() {
   const minorRadiusInput = document.getElementById('minorRadius') as HTMLInputElement;
   const majorSegmentsInput = document.getElementById('majorSegments') as HTMLInputElement;
   const minorSegmentsInput = document.getElementById('minorSegments') as HTMLInputElement;
+  const capsuleRadiusInput = document.getElementById('capsuleRadius') as HTMLInputElement;
+  const capsuleHeightInput = document.getElementById('capsuleHeight') as HTMLInputElement;
+  const capsuleSegmentsInput = document.getElementById('capsuleSegments') as HTMLInputElement;
   const viewModeSelect = document.getElementById('viewMode') as HTMLSelectElement;
 
   function rebuildSweep() {
@@ -296,10 +405,14 @@ async function main() {
     const minorRadius = parseFloat(minorRadiusInput.value) || 0.3;
     const majorSegments = parseInt(majorSegmentsInput.value, 10) || 36;
     const minorSegments = parseInt(minorSegmentsInput.value, 10) || 18;
+    const capsuleRadius = parseFloat(capsuleRadiusInput?.value) || 0.3;
+    const capsuleHeight = parseFloat(capsuleHeightInput?.value) || 1.0;
+    const capsuleSegments = parseInt(capsuleSegmentsInput?.value, 10) || 24;
 
     setSweepConfig({
       type,
       torus: { majorRadius, minorRadius, majorSegments, minorSegments },
+      capsule: { radius: capsuleRadius, height: capsuleHeight, segments: capsuleSegments },
     });
   }
 
@@ -324,6 +437,18 @@ async function main() {
 
   if (minorSegmentsInput) {
     minorSegmentsInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (capsuleRadiusInput) {
+    capsuleRadiusInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (capsuleHeightInput) {
+    capsuleHeightInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (capsuleSegmentsInput) {
+    capsuleSegmentsInput.addEventListener('change', rebuildSweep);
   }
 
   if (viewModeSelect) {

@@ -72,6 +72,7 @@
         Sweep:
         <select id="sweepType">
           <option value="Torus" selected>Torus</option>
+          <option value="Capsule">Capsule</option>
         </select>
       </label>
       <div id="torusOptions" class="sweep-options">
@@ -90,6 +91,20 @@
         <label>
           Minor Segments:
           <input type="number" id="minorSegments" value="18" min="3" max="64" />
+        </label>
+      </div>
+      <div id="capsuleOptions" class="sweep-options" style="display: none">
+        <label>
+          Radius:
+          <input type="number" id="capsuleRadius" value="0.3" min="0.05" max="2.0" step="0.05" />
+        </label>
+        <label>
+          Height:
+          <input type="number" id="capsuleHeight" value="1.0" min="0.0" max="5.0" step="0.1" />
+        </label>
+        <label>
+          Segments:
+          <input type="number" id="capsuleSegments" value="24" min="3" max="64" />
         </label>
       </div>
       <label>

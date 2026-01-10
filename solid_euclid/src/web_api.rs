@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
-use crate::sweeps::Torus;
+use crate::sweeps::{Capsule, Torus};
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -269,6 +269,75 @@ pub fn create_torus(torus: JsValue) -> Result<WasmTriangularMesh, JsError> {
     let triangular_mesh = torus
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create torus mesh: {:?}", e)))?;
+
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    Ok(WasmTriangularMesh {
+        material_ids,
+        geometries,
+    })
+}
+
+/// Creates a triangular mesh for a Capsule from a JavaScript object.
+///
+/// A capsule is a cylinder with hemispheres at both ends. It supports 3 material regions:
+/// - Face 0: Bottom hemisphere
+/// - Face 1: Cylindrical body
+/// - Face 2: Top hemisphere
+///
+/// # Arguments
+/// * `capsule` - A JavaScript object representing a `Capsule` with the following fields:
+///   - `radius`: The radius of the cylinder and hemispheres (f64)
+///   - `height`: The length of the cylindrical body (f64)
+///   - `segments`: Number of segments for tessellation (u32)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Capsule with uniform material
+/// const mesh = create_capsule({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Capsule with 3 materials (bottom, body, top)
+/// const mesh = create_capsule({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   material: { Array: ["bottom", "body", "top"] }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_capsule(capsule: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let capsule: Capsule = serde_wasm_bindgen::from_value(capsule)
+        .map_err(|e| JsError::new(&format!("Failed to parse capsule: {}", e)))?;
+
+    let triangular_mesh = capsule
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create capsule mesh: {:?}", e)))?;
 
     let mut material_ids = Vec::new();
     let mut geometries = Vec::new();
@@ -1026,5 +1095,181 @@ mod tests {
             geometry.triangle_count(),
             expected_min / 2
         );
+    }
+
+    // ==================== Capsule Tests ====================
+
+    // Helper to create a WasmTriangularMesh from a Capsule directly for testing
+    fn create_mesh_from_capsule(capsule: Capsule) -> WasmTriangularMesh {
+        let triangular_mesh = capsule.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_uniform_material() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_default_material() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Default);
+        let mesh = create_mesh_from_capsule(capsule);
+
+        // Default material creates 3 regions for capsule
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_capsule_array_3_materials() {
+        let materials = vec!["bottom".to_string(), "body".to_string(), "top".to_string()];
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Array(materials));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        assert_eq!(mesh.geometry_count(), 3);
+        assert!(mesh.material_ids.contains(&"bottom".to_string()));
+        assert!(mesh.material_ids.contains(&"body".to_string()));
+        assert!(mesh.material_ids.contains(&"top".to_string()));
+    }
+
+    #[test]
+    fn test_create_capsule_geometry_data_not_empty() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_capsule_geometry_data_sizes_consistent() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_capsule_normals_are_normalized() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+
+            assert!(
+                (length - 1.0).abs() < 0.01,
+                "Normal at index {} should be normalized, but length is {}",
+                i / 3,
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_indices_within_bounds() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_zero_height() {
+        // A capsule with zero height is essentially a sphere
+        let capsule = Capsule::new(0.5, 0.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_tall() {
+        // Test a tall capsule
+        let capsule = Capsule::new(0.5, 10.0, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_get_geometry_by_material() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("my_material".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_capsule_different_segment_counts() {
+        let low_res = Capsule::new(0.5, 2.0, 6, Material::Uniform("default".to_string()));
+        let high_res = Capsule::new(0.5, 2.0, 24, Material::Uniform("default".to_string()));
+
+        let low_mesh = create_mesh_from_capsule(low_res);
+        let high_mesh = create_mesh_from_capsule(high_res);
+
+        let low_geo = low_mesh.get_geometry(0).unwrap();
+        let high_geo = high_mesh.get_geometry(0).unwrap();
+
+        // Higher resolution should have more triangles
+        assert!(high_geo.triangle_count() > low_geo.triangle_count());
     }
 }
