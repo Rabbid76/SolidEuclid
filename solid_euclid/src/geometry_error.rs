@@ -16,6 +16,13 @@ pub enum GeometryError {
         /// A description of the feature that is not yet implemented.
         feature: String,
     },
+    /// An invalid parameter was provided to the operation.
+    InvalidParameter {
+        /// The name of the invalid parameter.
+        parameter: String,
+        /// A message describing why the parameter is invalid.
+        message: String,
+    },
 }
 
 impl fmt::Display for GeometryError {
@@ -30,6 +37,9 @@ impl fmt::Display for GeometryError {
             }
             GeometryError::NotYetImplemented { feature } => {
                 write!(f, "Not yet implemented: {}", feature)
+            }
+            GeometryError::InvalidParameter { parameter, message } => {
+                write!(f, "Invalid parameter '{}': {}", parameter, message)
             }
         }
     }

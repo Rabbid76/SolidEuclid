@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub enum Corner {
     /// A sharp edge corner with no modification.
     Edge,
+    /// A smooth edge that blends tangentially with adjacent segments.
+    SmoothEdge,
     /// A chamfered corner that cuts off the corner at a given distance.
     Chamfer {
         /// The distance from the corner vertex to the chamfer cut.
@@ -135,6 +137,12 @@ mod tests {
     fn test_corner_edge() {
         let corner = Corner::Edge;
         assert_eq!(corner, Corner::Edge);
+    }
+
+    #[test]
+    fn test_corner_smooth_edge() {
+        let corner = Corner::SmoothEdge;
+        assert_eq!(corner, Corner::SmoothEdge);
     }
 
     #[test]
@@ -327,6 +335,7 @@ mod tests {
     #[test]
     fn test_corner_equality() {
         assert_eq!(Corner::Edge, Corner::Edge);
+        assert_eq!(Corner::SmoothEdge, Corner::SmoothEdge);
         assert_eq!(
             Corner::Chamfer { distance: 1.0 },
             Corner::Chamfer { distance: 1.0 }
@@ -335,7 +344,9 @@ mod tests {
             Corner::Fillet { radius: 2.0 },
             Corner::Fillet { radius: 2.0 }
         );
+        assert_ne!(Corner::Edge, Corner::SmoothEdge);
         assert_ne!(Corner::Edge, Corner::Chamfer { distance: 1.0 });
+        assert_ne!(Corner::SmoothEdge, Corner::Chamfer { distance: 1.0 });
         assert_ne!(
             Corner::Chamfer { distance: 1.0 },
             Corner::Fillet { radius: 1.0 }
@@ -350,6 +361,11 @@ mod tests {
         let json = serde_json::to_string(&edge).unwrap();
         let deserialized: Corner = serde_json::from_str(&json).unwrap();
         assert_eq!(edge, deserialized);
+
+        let smooth_edge = Corner::SmoothEdge;
+        let json = serde_json::to_string(&smooth_edge).unwrap();
+        let deserialized: Corner = serde_json::from_str(&json).unwrap();
+        assert_eq!(smooth_edge, deserialized);
 
         let chamfer = Corner::Chamfer { distance: 2.5 };
         let json = serde_json::to_string(&chamfer).unwrap();
@@ -448,11 +464,10 @@ mod tests {
 
     #[test]
     fn test_planar_profile_json_format() {
-        let profile = PlanarProfile::with_commands(vec![ProfileCommand::with_edge(
-            PathCommand::Move {
+        let profile =
+            PlanarProfile::with_commands(vec![ProfileCommand::with_edge(PathCommand::Move {
                 point: DVec2::new(1.0, 2.0),
-            },
-        )]);
+            })]);
 
         let json = serde_json::to_string_pretty(&profile).unwrap();
         assert!(json.contains("commands"));

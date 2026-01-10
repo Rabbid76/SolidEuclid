@@ -3,6 +3,7 @@ pub mod geometry_error;
 pub mod geometry_hash;
 pub mod geometry_model;
 pub mod material;
+pub mod planar_contour;
 pub mod planar_profile;
 pub mod plane;
 pub mod platonic_solid;
