@@ -10,6 +10,7 @@ pub mod plane;
 pub mod platonic_solid;
 pub mod polygon_mesh;
 pub mod sphere;
+pub mod sweep_model;
 pub mod triangular_mesh;
 pub mod vertex;
 pub mod web_api;
