@@ -2,9 +2,6 @@
 
 ## TODO
 
-- 2D polyline: 2D line segments with geometry ID and normal; vector and UV at start and end.
-- 2D shapes of moves, lines, arcs, NURBS, etc.
-- 2D polyline from 2D shape
 - A rotation body or an extrude body can be created from two 2D polylines: one for the shape and one for the path.
   - Rotation bodies from closed and open 2D polyline
   - Extrude from closed and open 2D polyline
