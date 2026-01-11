@@ -467,6 +467,282 @@ impl GeometryModel for Capsule {
     }
 }
 
+/// Represents a cylinder defined by radius, height, and edge treatments.
+///
+/// A cylinder is created by sweeping a profile (horizontal line + vertical line + horizontal line)
+/// along a circular path. The cylinder is oriented along the Y-axis, with the center
+/// at the origin.
+///
+/// The cylinder supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Cylindrical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Example
+/// ```
+/// use solid_euclid::sweeps::Cylinder;
+/// use solid_euclid::material::Material;
+/// use solid_euclid::planar_profile::Corner;
+///
+/// let cylinder = Cylinder::new(
+///     0.5,           // radius
+///     2.0,           // height
+///     24,            // segments
+///     Corner::Edge,  // bottom_edge
+///     Corner::Edge,  // top_edge
+///     Material::Default,
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cylinder {
+    /// The radius of the cylinder.
+    pub radius: f64,
+    /// The total height of the cylinder.
+    pub height: f64,
+    /// The number of segments for tessellation around the circumference.
+    pub segments: u32,
+    /// The corner treatment at the bottom edge.
+    pub bottom_edge: Corner,
+    /// The corner treatment at the top edge.
+    pub top_edge: Corner,
+    /// The material assignment for the cylinder surfaces.
+    pub material: Material,
+}
+
+impl Cylinder {
+    /// Creates a new `Cylinder` with the given parameters.
+    ///
+    /// # Arguments
+    /// * `radius` - The radius of the cylinder
+    /// * `height` - The total height of the cylinder
+    /// * `segments` - The number of segments for tessellation
+    /// * `bottom_edge` - The corner treatment at the bottom edge
+    /// * `top_edge` - The corner treatment at the top edge
+    /// * `material` - The material assignment for the surfaces
+    ///
+    /// # Panics
+    /// This function does not panic, but invalid parameters will result in
+    /// errors when generating the mesh.
+    pub fn new(
+        radius: f64,
+        height: f64,
+        segments: u32,
+        bottom_edge: Corner,
+        top_edge: Corner,
+        material: Material,
+    ) -> Self {
+        Self {
+            radius,
+            height,
+            segments,
+            bottom_edge,
+            top_edge,
+            material,
+        }
+    }
+
+    /// Creates a circular path profile (same as Torus).
+    ///
+    /// # Arguments
+    /// * `radius` - The radius of the circular path
+    fn create_circle_path(radius: f64) -> PlanarProfile {
+        Torus::create_circle_profile(radius)
+    }
+
+    /// Gets the effective radius of an edge corner.
+    fn get_edge_radius(corner: &Corner) -> f64 {
+        match corner {
+            Corner::Edge | Corner::SmoothEdge => 0.0,
+            Corner::Chamfer { distance } => *distance,
+            Corner::Fillet { radius } => *radius,
+        }
+    }
+
+    /// Creates a `SweepModel` from this cylinder.
+    ///
+    /// The sweep model uses:
+    /// - A circular path (the revolution around Y-axis)
+    /// - A cylinder profile (horizontal line at bottom + vertical line + horizontal line at top)
+    /// - Sample distances calculated from the geometry and segment count
+    ///
+    /// # Returns
+    /// A `SweepModel` that can be used to generate the cylinder geometry
+    fn to_sweep_model(&self) -> SweepModel<PlanarProfile, PlanarProfile> {
+        let half_height = self.height / 2.0;
+
+        // The path creates the revolution around the Y-axis
+        let path = Self::create_circle_path(self.radius);
+
+        // Profile is the cylinder cross-section with edge treatments
+        let profile = self.create_cylinder_profile(half_height);
+
+        // Calculate sample distances
+        let path_circumference = 2.0 * PI * self.radius;
+        let path_sample_distance = path_circumference / self.segments as f64;
+
+        // Profile length depends on edges
+        let bottom_edge_size = Self::get_edge_radius(&self.bottom_edge);
+        let top_edge_size = Self::get_edge_radius(&self.top_edge);
+        let body_height = self.height - bottom_edge_size - top_edge_size;
+        let profile_length =
+            self.radius * 2.0 + body_height.max(0.0) + bottom_edge_size + top_edge_size;
+        let profile_segments = self.segments / 2;
+        let profile_sample_distance = profile_length / profile_segments.max(1) as f64;
+
+        SweepModel::new(
+            path,
+            profile,
+            path_sample_distance,
+            profile_sample_distance,
+            self.material.clone(),
+        )
+    }
+
+    /// Creates the cylinder profile with edge treatments.
+    ///
+    /// The profile is:
+    /// - Horizontal line from axis to edge at bottom (bottom cap)
+    /// - Bottom edge corner treatment
+    /// - Vertical line up the body
+    /// - Top edge corner treatment
+    /// - Horizontal line from edge to axis at top (top cap)
+    ///
+    /// # Arguments
+    /// * `half_height` - Half the total height of the cylinder
+    fn create_cylinder_profile(&self, half_height: f64) -> PlanarProfile {
+        // Profile coordinates in sweep model:
+        // - Profile X maps to radial direction from path center
+        // - Profile Y maps to perpendicular direction (Y-axis in 3D)
+        //
+        // Since path has radius R, and we want the cylinder surface at radial = R,
+        // we need profile X to go from -R (at axis) to 0 (at surface)
+
+        // The 4 corner points of the cylinder cross-section
+        let bottom_center = DVec2::new(-self.radius, -half_height); // axis at bottom
+        let bottom_surface = DVec2::new(0.0, -half_height); // surface at bottom
+        let top_surface = DVec2::new(0.0, half_height); // surface at top
+        let top_center = DVec2::new(-self.radius, half_height); // axis at top
+
+        // Simple 4-command profile:
+        // Move to bottom center, then 3 lines forming the cross-section
+        // The corner treatments (Edge/Chamfer/Fillet) are specified on the Line commands
+        // and will be processed by PlanarProfile::to_curve_set()
+        PlanarProfile::with_commands(vec![
+            // Start at bottom center (on the axis)
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: bottom_center,
+                },
+                Corner::Edge,
+            ),
+            // Bottom cap: line from axis to surface, with bottom_edge corner treatment
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: bottom_surface,
+                },
+                self.bottom_edge,
+            ),
+            // Body: vertical line up the surface, with top_edge corner treatment
+            ProfileCommand::new(PathCommand::Line { point: top_surface }, self.top_edge),
+            // Top cap: line from surface back to axis
+            ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
+        ])
+    }
+}
+
+impl GeometryModel for Cylinder {
+    /// Converts the cylinder to a polygon mesh.
+    ///
+    /// This method creates a `SweepModel` from the cylinder parameters and
+    /// delegates to the sweep model's `to_polygon_mesh` implementation.
+    /// After mesh generation, the geometry IDs are remapped to support
+    /// 5 material regions: bottom cap (0), bottom edge (1), body (2), top edge (3), top cap (4).
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the cylinder,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The radius is invalid (zero or negative)
+    /// - The height is invalid (zero or negative)
+    /// - The segment count is less than 3
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Validate parameters
+        if self.radius <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "radius".to_string(),
+                message: "Radius must be positive".to_string(),
+            });
+        }
+        if self.height <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "height".to_string(),
+                message: "Height must be positive".to_string(),
+            });
+        }
+        if self.segments < 3 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "segments".to_string(),
+                message: "Segments must be at least 3".to_string(),
+            });
+        }
+
+        // Validate edge sizes don't exceed half the height
+        let bottom_edge_size = Self::get_edge_radius(&self.bottom_edge);
+        let top_edge_size = Self::get_edge_radius(&self.top_edge);
+        if bottom_edge_size + top_edge_size > self.height {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "edges".to_string(),
+                message: "Combined edge sizes cannot exceed cylinder height".to_string(),
+            });
+        }
+
+        let sweep_model = self.to_sweep_model();
+        let mut mesh = sweep_model.to_polygon_mesh()?;
+
+        // Map segment IDs to our 5 material regions:
+        // 0 = bottom cap, 1 = bottom edge, 2 = body, 3 = top edge, 4 = top cap
+        //
+        // With the simple 4-command profile (Move, Line, Line, Line), the PlanarProfile
+        // generates segment IDs as follows:
+        // - Path segments get even IDs: 0, 2, 4 (for our 3 Line commands)
+        // - Corner segments (fillets/chamfers) get odd IDs: 1, 3 (between the lines)
+        //
+        // So the mapping is:
+        // segment_id 0 -> geometry 0 (bottom cap)
+        // segment_id 1 -> geometry 1 (bottom edge fillet/chamfer, if present)
+        // segment_id 2 -> geometry 2 (body)
+        // segment_id 3 -> geometry 3 (top edge fillet/chamfer, if present)
+        // segment_id 4 -> geometry 4 (top cap)
+
+        for polygon in &mut mesh.polygons {
+            let segment_id = polygon.geometry_id;
+
+            // Direct mapping - segment IDs already match our 5 regions
+            polygon.geometry_id = match segment_id {
+                0 => 0, // bottom cap
+                1 => 1, // bottom edge
+                2 => 2, // body
+                3 => 3, // top edge
+                4 => 4, // top cap
+                _ => segment_id % 5,
+            };
+        }
+
+        // Update material map for the 5 regions
+        mesh.material_map.clear();
+        for face_index in 0..5 {
+            let material_name = self.material.get_material_for_face(face_index, 5);
+            mesh.set_material(face_index, material_name);
+        }
+
+        Ok(mesh)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1154,5 +1430,635 @@ mod tests {
         let profile = Capsule::create_capsule_profile_offset(0.5, 0.0);
 
         assert_eq!(profile.len(), 4);
+    }
+
+    // ============================================================================
+    // Cylinder construction tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_new() {
+        let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+
+        assert_eq!(cylinder.radius, 0.5);
+        assert_eq!(cylinder.height, 2.0);
+        assert_eq!(cylinder.segments, 24);
+        assert_eq!(cylinder.bottom_edge, Corner::Edge);
+        assert_eq!(cylinder.top_edge, Corner::Edge);
+        assert_eq!(cylinder.material, Material::Default);
+    }
+
+    #[test]
+    fn test_cylinder_with_uniform_material() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("metal".to_string()),
+        );
+
+        if let Material::Uniform(name) = &cylinder.material {
+            assert_eq!(name, "metal");
+        } else {
+            panic!("Expected Material::Uniform");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_with_chamfer_edges() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+
+        assert_eq!(cylinder.bottom_edge, Corner::Chamfer { distance: 0.1 });
+        assert_eq!(cylinder.top_edge, Corner::Chamfer { distance: 0.1 });
+    }
+
+    #[test]
+    fn test_cylinder_with_fillet_edges() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        assert_eq!(cylinder.bottom_edge, Corner::Fillet { radius: 0.1 });
+        assert_eq!(cylinder.top_edge, Corner::Fillet { radius: 0.1 });
+    }
+
+    #[test]
+    fn test_cylinder_with_mixed_edges() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Fillet { radius: 0.15 },
+            Material::Default,
+        );
+
+        assert_eq!(cylinder.bottom_edge, Corner::Chamfer { distance: 0.1 });
+        assert_eq!(cylinder.top_edge, Corner::Fillet { radius: 0.15 });
+    }
+
+    #[test]
+    fn test_cylinder_clone() {
+        let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+        let cloned = cylinder.clone();
+
+        assert_eq!(cylinder, cloned);
+    }
+
+    // ============================================================================
+    // Cylinder serialization tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_serialize_deserialize() {
+        let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+        let json = serde_json::to_string(&cylinder).expect("Failed to serialize");
+        let deserialized: Cylinder = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(cylinder, deserialized);
+    }
+
+    #[test]
+    fn test_cylinder_serialize_with_uniform_material() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("test".to_string()),
+        );
+        let json = serde_json::to_string(&cylinder).expect("Failed to serialize");
+        let deserialized: Cylinder = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(cylinder, deserialized);
+    }
+
+    #[test]
+    fn test_cylinder_serialize_with_chamfer() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Edge,
+            Material::Default,
+        );
+        let json = serde_json::to_string(&cylinder).expect("Failed to serialize");
+        let deserialized: Cylinder = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(cylinder, deserialized);
+    }
+
+    #[test]
+    fn test_cylinder_serialize_with_fillet() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.15 },
+            Material::Default,
+        );
+        let json = serde_json::to_string(&cylinder).expect("Failed to serialize");
+        let deserialized: Cylinder = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(cylinder, deserialized);
+    }
+
+    // ============================================================================
+    // Cylinder mesh generation tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_to_polygon_mesh() {
+        let cylinder = Cylinder::new(0.5, 2.0, 12, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+
+        let mesh = result.unwrap();
+        assert!(!mesh.is_empty());
+        assert!(mesh.polygon_count() > 0);
+        assert!(mesh.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_cylinder_with_chamfer_to_polygon_mesh() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_cylinder_with_fillet_to_polygon_mesh() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_cylinder_has_five_material_regions() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Array(vec![
+                "bottom_cap".to_string(),
+                "bottom_edge".to_string(),
+                "body".to_string(),
+                "top_edge".to_string(),
+                "top_cap".to_string(),
+            ]),
+        );
+
+        let mesh = cylinder.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Check that we have 5 materials
+        assert_eq!(mesh.get_material(0), Some(&"bottom_cap".to_string()));
+        assert_eq!(mesh.get_material(1), Some(&"bottom_edge".to_string()));
+        assert_eq!(mesh.get_material(2), Some(&"body".to_string()));
+        assert_eq!(mesh.get_material(3), Some(&"top_edge".to_string()));
+        assert_eq!(mesh.get_material(4), Some(&"top_cap".to_string()));
+    }
+
+    #[test]
+    fn test_cylinder_no_edges_material_regions() {
+        // Without edge treatments, we only have bottom_cap, body, top_cap
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Array(vec![
+                "bottom_cap".to_string(),
+                "bottom_edge".to_string(),
+                "body".to_string(),
+                "top_edge".to_string(),
+                "top_cap".to_string(),
+            ]),
+        );
+
+        let mesh = cylinder.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Geometry IDs should be mapped to 0, 2, 4 (no edge regions when using Edge corners)
+        let geometry_ids: std::collections::HashSet<_> =
+            mesh.polygons.iter().map(|p| p.geometry_id).collect();
+
+        // With Edge corners, we should have bottom cap (0), body (2), and top cap (4)
+        assert!(
+            geometry_ids.contains(&0),
+            "Should have bottom cap (0), got: {:?}",
+            geometry_ids
+        );
+        assert!(
+            geometry_ids.contains(&4),
+            "Should have top cap (4), got: {:?}",
+            geometry_ids
+        );
+        // Body should be present - it maps to geometry_id 2
+        assert!(
+            geometry_ids.contains(&2),
+            "Should have body (2), got: {:?}",
+            geometry_ids
+        );
+    }
+
+    #[test]
+    fn test_cylinder_default_material_creates_five_regions() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+
+        let mesh = cylinder.to_polygon_mesh().expect("Failed to create mesh");
+
+        // Default material should create unique names for each face
+        assert!(mesh.get_material(0).is_some());
+        assert!(mesh.get_material(1).is_some());
+        assert!(mesh.get_material(2).is_some());
+        assert!(mesh.get_material(3).is_some());
+        assert!(mesh.get_material(4).is_some());
+    }
+
+    #[test]
+    fn test_cylinder_normals_are_normalized() {
+        let cylinder = Cylinder::new(0.5, 2.0, 12, Corner::Edge, Corner::Edge, Material::Default);
+        let mesh = cylinder.to_polygon_mesh().expect("Failed to create mesh");
+
+        for vertex in &mesh.vertices {
+            let normal = vertex.normal;
+            let length = normal.length();
+
+            assert!(
+                (length - 1.0).abs() < 1e-6,
+                "Normal should be normalized, but length is {}",
+                length
+            );
+        }
+    }
+
+    // ============================================================================
+    // Cylinder error handling tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_zero_radius() {
+        let cylinder = Cylinder::new(0.0, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "radius");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_negative_radius() {
+        let cylinder = Cylinder::new(-0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "radius");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_zero_height() {
+        let cylinder = Cylinder::new(0.5, 0.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "height");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_negative_height() {
+        let cylinder = Cylinder::new(0.5, -2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "height");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_insufficient_segments() {
+        let cylinder = Cylinder::new(0.5, 2.0, 2, Corner::Edge, Corner::Edge, Material::Default);
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "segments");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    #[test]
+    fn test_cylinder_edges_exceed_height() {
+        let cylinder = Cylinder::new(
+            0.5,
+            1.0,
+            24,
+            Corner::Chamfer { distance: 0.6 },
+            Corner::Chamfer { distance: 0.6 },
+            Material::Default,
+        );
+
+        let result = cylinder.to_polygon_mesh();
+        assert!(result.is_err());
+
+        if let Err(GeometryError::InvalidParameter { parameter, .. }) = result {
+            assert_eq!(parameter, "edges");
+        } else {
+            panic!("Expected InvalidParameter error");
+        }
+    }
+
+    // ============================================================================
+    // Cylinder sweep model tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_to_sweep_model() {
+        let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+        let sweep_model = cylinder.to_sweep_model();
+
+        assert_eq!(sweep_model.material, Material::Default);
+    }
+
+    #[test]
+    fn test_cylinder_to_sweep_model_material_preserved() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("test_material".to_string()),
+        );
+        let sweep_model = cylinder.to_sweep_model();
+
+        assert_eq!(
+            sweep_model.material,
+            Material::Uniform("test_material".to_string())
+        );
+    }
+
+    // ============================================================================
+    // Cylinder profile tests
+    // ============================================================================
+
+    #[test]
+    fn test_cylinder_profile_no_edges() {
+        let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
+        let profile = cylinder.create_cylinder_profile(1.0);
+
+        // Profile should have exactly 4 commands: Move, Line, Line, Line
+        assert_eq!(profile.len(), 4);
+    }
+
+    #[test]
+    fn test_cylinder_profile_with_chamfers() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let profile = cylinder.create_cylinder_profile(1.0);
+
+        // Profile should still have exactly 4 commands - corners are encoded in the Line commands
+        assert_eq!(profile.len(), 4);
+
+        // Verify the corner types
+        assert!(matches!(profile.commands[1].corner, Corner::Chamfer { .. }));
+        assert!(matches!(profile.commands[2].corner, Corner::Chamfer { .. }));
+    }
+
+    #[test]
+    fn test_cylinder_get_edge_radius() {
+        assert_eq!(Cylinder::get_edge_radius(&Corner::Edge), 0.0);
+        assert_eq!(Cylinder::get_edge_radius(&Corner::SmoothEdge), 0.0);
+        assert_eq!(
+            Cylinder::get_edge_radius(&Corner::Chamfer { distance: 0.5 }),
+            0.5
+        );
+        assert_eq!(
+            Cylinder::get_edge_radius(&Corner::Fillet { radius: 0.3 }),
+            0.3
+        );
+    }
+
+    /// Test with exact parameters from vitest that was hanging
+    #[test]
+    fn test_cylinder_fillet_vitest_parameters() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        // This should complete without hanging
+        let mesh = cylinder.to_polygon_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Cylinder mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.polygons.is_empty());
+
+        // Should have 5 geometry regions (0=bottom cap, 1=bottom fillet, 2=body, 3=top fillet, 4=top cap)
+        let geometry_ids: std::collections::HashSet<_> =
+            mesh.polygons.iter().map(|p| p.geometry_id).collect();
+        assert_eq!(
+            geometry_ids.len(),
+            5,
+            "Expected 5 geometry regions, got {:?}",
+            geometry_ids
+        );
+    }
+
+    /// Test triangular mesh generation with exact vitest parameters
+    #[test]
+    fn test_cylinder_fillet_triangular_mesh_vitest_parameters() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        // This should complete without hanging
+        let mesh = cylinder.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(mesh.geometries.len(), 5, "Expected 5 material regions");
+    }
+
+    /// Test with SMALL fillet radius (0.05) - this was hanging in vitest
+    #[test]
+    fn test_cylinder_small_fillet_radius() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.05 },
+            Corner::Fillet { radius: 0.05 },
+            Material::Uniform("default".to_string()),
+        );
+
+        // This should complete without hanging
+        let mesh = cylinder.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(
+            mesh.geometries.len(),
+            1,
+            "Expected 1 material region with Uniform"
+        );
+    }
+
+    /// Test the profile creation with small fillet radius
+    #[test]
+    fn test_cylinder_small_fillet_profile_only() {
+        let cylinder = Cylinder::new(
+            0.5, // radius
+            2.0, // height
+            12,
+            Corner::Fillet { radius: 0.05 },
+            Corner::Fillet { radius: 0.05 },
+            Material::Default,
+        );
+
+        // Create the profile directly using the internal method
+        let profile = cylinder.create_cylinder_profile(1.0); // half_height = 1.0
+
+        // Convert to curve set
+        let curve_set = profile.to_curve_set();
+        assert!(
+            curve_set.is_ok(),
+            "Curve set creation failed: {:?}",
+            curve_set.err()
+        );
+
+        let curve_set = curve_set.unwrap();
+        assert_eq!(curve_set.curves.len(), 1, "Expected 1 curve");
+
+        // Verify all segment lengths are reasonable
+        for curve in curve_set.curves.iter() {
+            for seg in curve.segments.iter() {
+                let len = seg.length();
+                assert!(
+                    len < 10.0,
+                    "Segment {} has unreasonable length: {}",
+                    seg.segment_id,
+                    len
+                );
+            }
+        }
+    }
+
+    /// Test with LARGE fillet radius (0.2) - test for the vitest
+    #[test]
+    fn test_cylinder_large_fillet_radius() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.2 },
+            Corner::Fillet { radius: 0.2 },
+            Material::Uniform("default".to_string()),
+        );
+
+        // This should complete without hanging
+        let mesh = cylinder.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(
+            mesh.geometries.len(),
+            1,
+            "Expected 1 material region with Uniform"
+        );
     }
 }

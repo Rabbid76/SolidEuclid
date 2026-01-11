@@ -381,11 +381,13 @@ impl Nurbs {
         }
 
         // Use adaptive numerical integration for curves
-        self.compute_arc_length_adaptive(0.0, 1.0, 1e-10)
+        // Max depth of 20 prevents infinite recursion with small curves
+        // At depth 20, worst case is ~2M iterations which is acceptable
+        self.compute_arc_length_adaptive(0.0, 1.0, 1e-10, 20)
     }
 
-    /// Computes arc length using adaptive Simpson's rule.
-    fn compute_arc_length_adaptive(&self, a: f64, b: f64, tolerance: f64) -> f64 {
+    /// Computes arc length using adaptive Simpson's rule with recursion limit.
+    fn compute_arc_length_adaptive(&self, a: f64, b: f64, tolerance: f64, depth: u32) -> f64 {
         let mid = (a + b) / 2.0;
 
         let whole = self.simpsons_rule(a, b);
@@ -394,11 +396,12 @@ impl Nurbs {
 
         let sum = left + right;
 
-        if (whole - sum).abs() < 15.0 * tolerance {
+        // Stop recursion if tolerance met OR max depth reached
+        if (whole - sum).abs() < 15.0 * tolerance || depth == 0 {
             sum + (sum - whole) / 15.0
         } else {
-            self.compute_arc_length_adaptive(a, mid, tolerance / 2.0)
-                + self.compute_arc_length_adaptive(mid, b, tolerance / 2.0)
+            self.compute_arc_length_adaptive(a, mid, tolerance / 2.0, depth - 1)
+                + self.compute_arc_length_adaptive(mid, b, tolerance / 2.0, depth - 1)
         }
     }
 

@@ -16,7 +16,12 @@ import {
 } from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import init, { create_torus, create_capsule, WasmTriangularMesh } from '@solid-euclid';
+import init, {
+  create_torus,
+  create_capsule,
+  create_cylinder,
+  WasmTriangularMesh,
+} from '@solid-euclid';
 import {
   createBufferGeometryFromWasm,
   createVertexNormals,
@@ -25,13 +30,17 @@ import {
 } from '../util/three-util';
 
 type ViewMode = 'geometry' | 'solid' | 'wireframe';
-type SweepType = 'Torus' | 'Capsule';
+type SweepType = 'Torus' | 'Capsule' | 'Cylinder';
+type EdgeType = 'Edge' | 'SmoothEdge' | 'Chamfer' | 'Fillet';
 
 // Material ID for uniform material (torus)
 const MATERIAL_ID = 'default';
 
 // Material IDs for capsule (3 regions)
 const CAPSULE_MATERIALS = ['bottom', 'body', 'top'];
+
+// Material IDs for cylinder (5 regions)
+const CYLINDER_MATERIALS = ['bottom_cap', 'bottom_edge', 'body', 'top_edge', 'top_cap'];
 
 interface TorusConfig {
   majorRadius: number;
@@ -46,10 +55,25 @@ interface CapsuleConfig {
   segments: number;
 }
 
+interface EdgeConfig {
+  type: EdgeType;
+  chamferDistance: number;
+  filletRadius: number;
+}
+
+interface CylinderConfig {
+  radius: number;
+  height: number;
+  segments: number;
+  bottomEdge: EdgeConfig;
+  topEdge: EdgeConfig;
+}
+
 interface SweepConfig {
   type: SweepType;
   torus: TorusConfig;
   capsule: CapsuleConfig;
+  cylinder: CylinderConfig;
 }
 
 async function main() {
@@ -108,6 +132,8 @@ async function main() {
     '../assets/512x512 Texel Density Texture 1.png',
     '../assets/512x512 Texel Density Texture 2.png',
     '../assets/512x512 Texel Density Texture 3.png',
+    '../assets/512x512 Texel Density Texture 4.png',
+    '../assets/512x512 Texel Density Texture 5.png',
   ];
 
   const textures = await Promise.all(
@@ -156,6 +182,22 @@ async function main() {
     );
   });
 
+  // Create materials for cylinder using textures (5 regions, cycle through 3 textures)
+  const cylinderMaterials: Map<string, MeshStandardMaterial> = new Map();
+  CYLINDER_MATERIALS.forEach((id, index) => {
+    cylinderMaterials.set(
+      id,
+      new MeshStandardMaterial({
+        map: textures[index % textures.length],
+        roughness: 0.5,
+        metalness: 0.0,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      })
+    );
+  });
+
   // State
   let currentConfig: SweepConfig = {
     type: 'Torus',
@@ -169,6 +211,13 @@ async function main() {
       radius: 0.3,
       height: 1.0,
       segments: 24,
+    },
+    cylinder: {
+      radius: 0.5,
+      height: 1.5,
+      segments: 24,
+      bottomEdge: { type: 'Edge', chamferDistance: 0.1, filletRadius: 0.1 },
+      topEdge: { type: 'Edge', chamferDistance: 0.1, filletRadius: 0.1 },
     },
   };
   let currentViewMode: ViewMode | null = null;
@@ -276,6 +325,78 @@ async function main() {
   }
 
   /**
+   * Converts an EdgeConfig to the WASM API format
+   */
+  function edgeConfigToWasm(
+    edge: EdgeConfig
+  ): string | { Chamfer: { distance: number } } | { Fillet: { radius: number } } {
+    switch (edge.type) {
+      case 'Edge':
+        return 'Edge';
+      case 'SmoothEdge':
+        return 'SmoothEdge';
+      case 'Chamfer':
+        return { Chamfer: { distance: edge.chamferDistance } };
+      case 'Fillet':
+        return { Fillet: { radius: edge.filletRadius } };
+    }
+  }
+
+  /**
+   * Creates the geometry and mesh objects for a cylinder
+   */
+  function createCylinderObjects(config: CylinderConfig): {
+    mergedGeometry: BufferGeometry;
+    meshGroup: Group;
+    wireframe: Group;
+  } {
+    // Create cylinder with Array material to get 5 separate geometry groups
+    const wasmMesh: WasmTriangularMesh = create_cylinder({
+      radius: config.radius,
+      height: config.height,
+      segments: config.segments,
+      bottom_edge: edgeConfigToWasm(config.bottomEdge),
+      top_edge: edgeConfigToWasm(config.topEdge),
+      material: {
+        Array: CYLINDER_MATERIALS,
+      },
+    });
+
+    // Create a group to hold meshes
+    const meshGroup = new Group();
+    const geometries: BufferGeometry[] = [];
+
+    // Create a mesh for each material in the mesh (bottom_cap, bottom_edge, body, top_edge, top_cap)
+    const materialIds = wasmMesh.material_ids as string[];
+    for (let i = 0; i < wasmMesh.geometry_count; i++) {
+      const wasmGeometry = wasmMesh.get_geometry(i);
+      if (wasmGeometry) {
+        const geometry = createBufferGeometryFromWasm(wasmGeometry);
+        geometries.push(geometry);
+
+        // Select material based on material ID
+        const materialId = materialIds[i] ?? '';
+        const material = cylinderMaterials.get(materialId) ?? solidMaterial;
+
+        const mesh = new Mesh(geometry, material);
+        meshGroup.add(mesh);
+      }
+    }
+
+    // Create merged geometry for wireframe visualization
+    const mergedGeometry = mergeBufferGeometries(geometries);
+
+    // Create wireframe visualization group
+    const wireframe = new Group();
+    const wireframeEdges = createWireframeEdges(mergedGeometry);
+    wireframe.add(wireframeEdges);
+    const vertexNormals = createVertexNormals(mergedGeometry, 0.1);
+    wireframe.add(vertexNormals);
+
+    return { mergedGeometry, meshGroup, wireframe };
+  }
+
+  /**
    * Creates the geometry and mesh objects for the current sweep configuration
    */
   function createSweepObjects(config: SweepConfig): {
@@ -288,9 +409,21 @@ async function main() {
         return createTorusObjects(config.torus);
       case 'Capsule':
         return createCapsuleObjects(config.capsule);
+      case 'Cylinder':
+        return createCylinderObjects(config.cylinder);
       default:
         throw new Error(`Unknown sweep type: ${config.type}`);
     }
+  }
+
+  /**
+   * Checks if two edge configs are equal
+   */
+  function edgeConfigsEqual(a: EdgeConfig, b: EdgeConfig): boolean {
+    if (a.type !== b.type) return false;
+    if (a.type === 'Chamfer' && a.chamferDistance !== b.chamferDistance) return false;
+    if (a.type === 'Fillet' && a.filletRadius !== b.filletRadius) return false;
+    return true;
   }
 
   /**
@@ -311,6 +444,15 @@ async function main() {
         a.capsule.radius === b.capsule.radius &&
         a.capsule.height === b.capsule.height &&
         a.capsule.segments === b.capsule.segments
+      );
+    }
+    if (a.type === 'Cylinder' && b.type === 'Cylinder') {
+      return (
+        a.cylinder.radius === b.cylinder.radius &&
+        a.cylinder.height === b.cylinder.height &&
+        a.cylinder.segments === b.cylinder.segments &&
+        edgeConfigsEqual(a.cylinder.bottomEdge, b.cylinder.bottomEdge) &&
+        edgeConfigsEqual(a.cylinder.topEdge, b.cylinder.topEdge)
       );
     }
     return true;
@@ -340,6 +482,11 @@ async function main() {
       type: config.type,
       torus: { ...config.torus },
       capsule: { ...config.capsule },
+      cylinder: {
+        ...config.cylinder,
+        bottomEdge: { ...config.cylinder.bottomEdge },
+        topEdge: { ...config.cylinder.topEdge },
+      },
     };
 
     // Re-apply current view mode
@@ -375,11 +522,29 @@ async function main() {
   function updateUIVisibility(sweepType: SweepType) {
     const torusOptions = document.getElementById('torusOptions');
     const capsuleOptions = document.getElementById('capsuleOptions');
+    const cylinderOptions = document.getElementById('cylinderOptions');
     if (torusOptions) {
       torusOptions.style.display = sweepType === 'Torus' ? 'flex' : 'none';
     }
     if (capsuleOptions) {
       capsuleOptions.style.display = sweepType === 'Capsule' ? 'flex' : 'none';
+    }
+    if (cylinderOptions) {
+      cylinderOptions.style.display = sweepType === 'Cylinder' ? 'flex' : 'none';
+    }
+  }
+
+  /**
+   * Updates edge parameter UI visibility based on edge type
+   */
+  function updateEdgeUIVisibility(position: 'bottom' | 'top', edgeType: EdgeType) {
+    const chamferLabel = document.getElementById(`${position}ChamferDistanceLabel`);
+    const filletLabel = document.getElementById(`${position}FilletRadiusLabel`);
+    if (chamferLabel) {
+      chamferLabel.style.display = edgeType === 'Chamfer' ? 'flex' : 'none';
+    }
+    if (filletLabel) {
+      filletLabel.style.display = edgeType === 'Fillet' ? 'flex' : 'none';
     }
   }
 
@@ -397,6 +562,23 @@ async function main() {
   const capsuleRadiusInput = document.getElementById('capsuleRadius') as HTMLInputElement;
   const capsuleHeightInput = document.getElementById('capsuleHeight') as HTMLInputElement;
   const capsuleSegmentsInput = document.getElementById('capsuleSegments') as HTMLInputElement;
+  const cylinderRadiusInput = document.getElementById('cylinderRadius') as HTMLInputElement;
+  const cylinderHeightInput = document.getElementById('cylinderHeight') as HTMLInputElement;
+  const cylinderSegmentsInput = document.getElementById('cylinderSegments') as HTMLInputElement;
+  const cylinderBottomEdgeSelect = document.getElementById(
+    'cylinderBottomEdge'
+  ) as HTMLSelectElement;
+  const cylinderTopEdgeSelect = document.getElementById('cylinderTopEdge') as HTMLSelectElement;
+  const bottomChamferDistanceInput = document.getElementById(
+    'bottomChamferDistance'
+  ) as HTMLInputElement;
+  const bottomFilletRadiusInput = document.getElementById('bottomFilletRadius') as HTMLInputElement;
+  const topChamferDistanceInput = document.getElementById('topChamferDistance') as HTMLInputElement;
+  const topFilletRadiusInput = document.getElementById('topFilletRadius') as HTMLInputElement;
+  const bottomChamferDistanceValue = document.getElementById('bottomChamferDistanceValue');
+  const bottomFilletRadiusValue = document.getElementById('bottomFilletRadiusValue');
+  const topChamferDistanceValue = document.getElementById('topChamferDistanceValue');
+  const topFilletRadiusValue = document.getElementById('topFilletRadiusValue');
   const viewModeSelect = document.getElementById('viewMode') as HTMLSelectElement;
 
   function rebuildSweep() {
@@ -408,11 +590,35 @@ async function main() {
     const capsuleRadius = parseFloat(capsuleRadiusInput?.value) || 0.3;
     const capsuleHeight = parseFloat(capsuleHeightInput?.value) || 1.0;
     const capsuleSegments = parseInt(capsuleSegmentsInput?.value, 10) || 24;
+    const cylinderRadius = parseFloat(cylinderRadiusInput?.value) || 0.5;
+    const cylinderHeight = parseFloat(cylinderHeightInput?.value) || 1.5;
+    const cylinderSegments = parseInt(cylinderSegmentsInput?.value, 10) || 24;
+    const bottomEdgeType = (cylinderBottomEdgeSelect?.value || 'Edge') as EdgeType;
+    const topEdgeType = (cylinderTopEdgeSelect?.value || 'Edge') as EdgeType;
+    const bottomChamferDistance = parseFloat(bottomChamferDistanceInput?.value) || 0.1;
+    const bottomFilletRadius = parseFloat(bottomFilletRadiusInput?.value) || 0.1;
+    const topChamferDistance = parseFloat(topChamferDistanceInput?.value) || 0.1;
+    const topFilletRadius = parseFloat(topFilletRadiusInput?.value) || 0.1;
 
     setSweepConfig({
       type,
       torus: { majorRadius, minorRadius, majorSegments, minorSegments },
       capsule: { radius: capsuleRadius, height: capsuleHeight, segments: capsuleSegments },
+      cylinder: {
+        radius: cylinderRadius,
+        height: cylinderHeight,
+        segments: cylinderSegments,
+        bottomEdge: {
+          type: bottomEdgeType,
+          chamferDistance: bottomChamferDistance,
+          filletRadius: bottomFilletRadius,
+        },
+        topEdge: {
+          type: topEdgeType,
+          chamferDistance: topChamferDistance,
+          filletRadius: topFilletRadius,
+        },
+      },
     });
   }
 
@@ -449,6 +655,69 @@ async function main() {
 
   if (capsuleSegmentsInput) {
     capsuleSegmentsInput.addEventListener('change', rebuildSweep);
+  }
+
+  // Cylinder event listeners
+  if (cylinderRadiusInput) {
+    cylinderRadiusInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (cylinderHeightInput) {
+    cylinderHeightInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (cylinderSegmentsInput) {
+    cylinderSegmentsInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (cylinderBottomEdgeSelect) {
+    cylinderBottomEdgeSelect.addEventListener('change', () => {
+      updateEdgeUIVisibility('bottom', cylinderBottomEdgeSelect.value as EdgeType);
+      rebuildSweep();
+    });
+  }
+
+  if (cylinderTopEdgeSelect) {
+    cylinderTopEdgeSelect.addEventListener('change', () => {
+      updateEdgeUIVisibility('top', cylinderTopEdgeSelect.value as EdgeType);
+      rebuildSweep();
+    });
+  }
+
+  if (bottomChamferDistanceInput) {
+    bottomChamferDistanceInput.addEventListener('input', () => {
+      if (bottomChamferDistanceValue) {
+        bottomChamferDistanceValue.textContent = bottomChamferDistanceInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (bottomFilletRadiusInput) {
+    bottomFilletRadiusInput.addEventListener('input', () => {
+      if (bottomFilletRadiusValue) {
+        bottomFilletRadiusValue.textContent = bottomFilletRadiusInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (topChamferDistanceInput) {
+    topChamferDistanceInput.addEventListener('input', () => {
+      if (topChamferDistanceValue) {
+        topChamferDistanceValue.textContent = topChamferDistanceInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (topFilletRadiusInput) {
+    topFilletRadiusInput.addEventListener('input', () => {
+      if (topFilletRadiusValue) {
+        topFilletRadiusValue.textContent = topFilletRadiusInput.value;
+      }
+      rebuildSweep();
+    });
   }
 
   if (viewModeSelect) {

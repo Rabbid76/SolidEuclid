@@ -359,6 +359,7 @@ impl PlanarProfile {
     }
 
     /// Processes a pending corner from the previous command.
+    /// This includes truncating the previous segment and adding the corner segment.
     fn process_pending_corner(
         curve: &mut Curve,
         pending_corner: &mut Option<(Corner, DVec2, DVec2)>,
@@ -370,8 +371,19 @@ impl PlanarProfile {
             if let Some(corner_nurbs) =
                 Self::create_corner_nurbs(corner, corner_pos, prev_end_tangent, next_start_tangent)
             {
-                // Update current position to corner end before moving corner_nurbs
+                // Get the corner start point (where the previous segment should end)
+                let corner_start = corner_nurbs.start_point();
                 let corner_end = corner_nurbs.end_point();
+
+                // Truncate the previous segment to end at corner_start
+                if let Some(last_segment) = curve.segments.last_mut() {
+                    // Replace the last segment's NURBS with a truncated version
+                    let seg_start = last_segment.nurbs.start_point();
+                    last_segment.nurbs = Nurbs::line(seg_start, corner_start);
+                    // Recalculate end_distance
+                    last_segment.end_distance =
+                        last_segment.start_distance + last_segment.nurbs.length();
+                }
 
                 // Corner segments get odd segment IDs (previous path index * 2 + 1)
                 let corner_segment_id = (*path_segment_index - 1) * 2 + 1;
@@ -430,10 +442,14 @@ impl PlanarProfile {
         let n1 = incoming_normal * sign;
 
         // Find the fillet start and end points
-        let half_angle = ((1.0 - incoming_tangent.dot(outgoing_tangent)) / 2.0)
-            .sqrt()
-            .asin();
-        if half_angle.abs() < 1e-9 {
+        let dot = incoming_tangent.dot(outgoing_tangent);
+        let half_angle_arg = (1.0 - dot) / 2.0;
+        let half_angle = half_angle_arg.sqrt().asin();
+
+        // Skip fillet if angle is too small (collinear edges)
+        // Use 1e-6 threshold to handle floating point precision issues
+        // (1e-9 was too tight and caused huge offsets from near-zero tan values)
+        if half_angle.abs() < 1e-6 {
             return None;
         }
 
@@ -1957,5 +1973,483 @@ mod tests {
         let contour = &contour_set.contours[0];
         // Each Bezier produces at least 2 segments, so at least 6 total
         assert!(contour.len() >= 6);
+    }
+
+    // ============================================================================
+    // Cylinder profile tests - tests for profiles like cylinder cross-sections
+    // ============================================================================
+
+    /// Creates a cylinder-like profile with the given edge treatments.
+    /// The profile is: horizontal line (bottom cap) -> vertical line (body) -> horizontal line (top cap)
+    /// This mimics the cylinder cross-section used in sweeps.rs
+    fn create_cylinder_profile(
+        radius: f64,
+        half_height: f64,
+        bottom_edge: Corner,
+        top_edge: Corner,
+    ) -> PlanarProfile {
+        let bottom_center = DVec2::new(-radius, -half_height);
+        let bottom_surface = DVec2::new(0.0, -half_height);
+        let top_surface = DVec2::new(0.0, half_height);
+        let top_center = DVec2::new(-radius, half_height);
+
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: bottom_center,
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: bottom_surface,
+                },
+                bottom_edge,
+            ),
+            ProfileCommand::new(PathCommand::Line { point: top_surface }, top_edge),
+            ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
+        ])
+    }
+
+    #[test]
+    fn test_cylinder_profile_sharp_edges_to_curve_set() {
+        let profile = create_cylinder_profile(1.0, 1.0, Corner::Edge, Corner::Edge);
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With sharp edges, we should have exactly 3 segments (3 lines, no corner segments)
+        assert_eq!(
+            curve.segments.len(),
+            3,
+            "Expected 3 segments for sharp edges"
+        );
+
+        // Check segment IDs: 0, 2, 4 (even numbers for path segments)
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "First segment should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 2,
+            "Second segment should have ID 2"
+        );
+        assert_eq!(
+            curve.segments[2].segment_id, 4,
+            "Third segment should have ID 4"
+        );
+
+        // Verify segment positions
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Seg0 start: {:?}",
+            start0
+        );
+        assert!(
+            (end0 - DVec2::new(0.0, -1.0)).length() < 1e-9,
+            "Seg0 end: {:?}",
+            end0
+        );
+
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        assert!(
+            (start1 - DVec2::new(0.0, -1.0)).length() < 1e-9,
+            "Seg1 start: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, 1.0)).length() < 1e-9,
+            "Seg1 end: {:?}",
+            end1
+        );
+
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, 1.0)).length() < 1e-9,
+            "Seg2 start: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Seg2 end: {:?}",
+            end2
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_chamfer_edges_to_curve_set() {
+        let chamfer_distance = 0.2;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With chamfer edges, we should have 5 segments:
+        // seg 0: bottom cap line (truncated)
+        // seg 1: bottom chamfer
+        // seg 2: body line (truncated at both ends)
+        // seg 3: top chamfer
+        // seg 4: top cap line (truncated)
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for chamfer edges, got {}",
+            curve.segments.len()
+        );
+
+        // Check segment IDs
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "Bottom cap should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 1,
+            "Bottom chamfer should have ID 1"
+        );
+        assert_eq!(curve.segments[2].segment_id, 2, "Body should have ID 2");
+        assert_eq!(
+            curve.segments[3].segment_id, 3,
+            "Top chamfer should have ID 3"
+        );
+        assert_eq!(curve.segments[4].segment_id, 4, "Top cap should have ID 4");
+
+        // Verify bottom cap segment (should end at chamfer_distance from corner)
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Bottom cap start wrong: {:?}",
+            start0
+        );
+        // End should be at (-chamfer_distance, -1.0) since chamfer cuts the corner
+        assert!(
+            (end0 - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}, expected {:?}",
+            end0,
+            DVec2::new(-chamfer_distance, -1.0)
+        );
+
+        // Verify bottom chamfer segment
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        // Chamfer should go from (-chamfer_distance, -1.0) to (0.0, -1.0 + chamfer_distance)
+        assert!(
+            (start1 - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom chamfer start wrong: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Bottom chamfer end wrong: {:?}, expected {:?}",
+            end1,
+            DVec2::new(0.0, -1.0 + chamfer_distance)
+        );
+
+        // Verify body segment (should start at chamfer offset and end at chamfer offset)
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(0.0, 1.0 - chamfer_distance)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            end2
+        );
+
+        // Verify top chamfer segment
+        let seg3 = &curve.segments[3];
+        let start3 = seg3.nurbs.evaluate(0.0);
+        let end3 = seg3.nurbs.evaluate(1.0);
+        // Top chamfer should go from (0.0, 1.0 - chamfer_distance) to (-chamfer_distance, 1.0)
+        assert!(
+            (start3 - DVec2::new(0.0, 1.0 - chamfer_distance)).length() < 1e-9,
+            "Top chamfer start wrong: {:?}",
+            start3
+        );
+        assert!(
+            (end3 - DVec2::new(-chamfer_distance, 1.0)).length() < 1e-9,
+            "Top chamfer end wrong: {:?}, expected {:?}",
+            end3,
+            DVec2::new(-chamfer_distance, 1.0)
+        );
+
+        // Verify top cap segment
+        let seg4 = &curve.segments[4];
+        let start4 = seg4.nurbs.evaluate(0.0);
+        let end4 = seg4.nurbs.evaluate(1.0);
+        assert!(
+            (start4 - DVec2::new(-chamfer_distance, 1.0)).length() < 1e-9,
+            "Top cap start wrong: {:?}",
+            start4
+        );
+        assert!(
+            (end4 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Top cap end wrong: {:?}",
+            end4
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_fillet_edges_to_curve_set() {
+        let fillet_radius = 0.2;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With fillet edges, we should have 5 segments:
+        // seg 0: bottom cap line (truncated)
+        // seg 1: bottom fillet arc
+        // seg 2: body line (truncated at both ends)
+        // seg 3: top fillet arc
+        // seg 4: top cap line (truncated)
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for fillet edges, got {}",
+            curve.segments.len()
+        );
+
+        // Check segment IDs
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "Bottom cap should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 1,
+            "Bottom fillet should have ID 1"
+        );
+        assert_eq!(curve.segments[2].segment_id, 2, "Body should have ID 2");
+        assert_eq!(
+            curve.segments[3].segment_id, 3,
+            "Top fillet should have ID 3"
+        );
+        assert_eq!(curve.segments[4].segment_id, 4, "Top cap should have ID 4");
+
+        // For a 90-degree corner, the offset along each edge = radius (since tan(45°) = 1)
+        let offset = fillet_radius;
+
+        // Verify bottom cap segment
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Bottom cap start wrong: {:?}",
+            start0
+        );
+        assert!(
+            (end0 - DVec2::new(-offset, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}, expected {:?}",
+            end0,
+            DVec2::new(-offset, -1.0)
+        );
+
+        // Verify bottom fillet arc endpoints
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        assert!(
+            (start1 - DVec2::new(-offset, -1.0)).length() < 1e-9,
+            "Bottom fillet start wrong: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, -1.0 + offset)).length() < 1e-9,
+            "Bottom fillet end wrong: {:?}, expected {:?}",
+            end1,
+            DVec2::new(0.0, -1.0 + offset)
+        );
+
+        // Verify body segment
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, -1.0 + offset)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(0.0, 1.0 - offset)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            end2
+        );
+
+        // Verify top fillet arc endpoints
+        let seg3 = &curve.segments[3];
+        let start3 = seg3.nurbs.evaluate(0.0);
+        let end3 = seg3.nurbs.evaluate(1.0);
+        assert!(
+            (start3 - DVec2::new(0.0, 1.0 - offset)).length() < 1e-9,
+            "Top fillet start wrong: {:?}",
+            start3
+        );
+        assert!(
+            (end3 - DVec2::new(-offset, 1.0)).length() < 1e-9,
+            "Top fillet end wrong: {:?}, expected {:?}",
+            end3,
+            DVec2::new(-offset, 1.0)
+        );
+
+        // Verify top cap segment
+        let seg4 = &curve.segments[4];
+        let start4 = seg4.nurbs.evaluate(0.0);
+        let end4 = seg4.nurbs.evaluate(1.0);
+        assert!(
+            (start4 - DVec2::new(-offset, 1.0)).length() < 1e-9,
+            "Top cap start wrong: {:?}",
+            start4
+        );
+        assert!(
+            (end4 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Top cap end wrong: {:?}",
+            end4
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_mixed_edges_to_curve_set() {
+        // Bottom: chamfer, Top: fillet
+        let chamfer_distance = 0.15;
+        let fillet_radius = 0.25;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for mixed edges"
+        );
+
+        // Bottom chamfer offset = chamfer_distance
+        // Top fillet offset = fillet_radius (for 90 degree corner)
+
+        // Bottom cap ends at (-chamfer_distance, -1.0)
+        let seg0_end = curve.segments[0].nurbs.evaluate(1.0);
+        assert!(
+            (seg0_end - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}",
+            seg0_end
+        );
+
+        // Body starts at (0.0, -1.0 + chamfer_distance)
+        let seg2_start = curve.segments[2].nurbs.evaluate(0.0);
+        assert!(
+            (seg2_start - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            seg2_start
+        );
+
+        // Body ends at (0.0, 1.0 - fillet_radius)
+        let seg2_end = curve.segments[2].nurbs.evaluate(1.0);
+        assert!(
+            (seg2_end - DVec2::new(0.0, 1.0 - fillet_radius)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            seg2_end
+        );
+
+        // Top fillet ends at (-fillet_radius, 1.0)
+        let seg3_end = curve.segments[3].nurbs.evaluate(1.0);
+        assert!(
+            (seg3_end - DVec2::new(-fillet_radius, 1.0)).length() < 1e-9,
+            "Top fillet end wrong: {:?}",
+            seg3_end
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_small_fillet_radius() {
+        // Test with small fillet radius that was causing issues
+        let fillet_radius = 0.05;
+        let profile = create_cylinder_profile(
+            0.5,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments");
+
+        // Verify the fillet segments have reasonable positions (with floating point tolerance)
+        let tolerance = 1e-9;
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+
+        // Start and end should be within the profile bounds (with tolerance for floating point)
+        assert!(
+            start1.x >= -0.5 - tolerance && start1.x <= tolerance,
+            "Fillet start x out of bounds: {}",
+            start1.x
+        );
+        assert!(
+            start1.y >= -1.0 - tolerance && start1.y <= 1.0 + tolerance,
+            "Fillet start y out of bounds: {}",
+            start1.y
+        );
+        assert!(
+            end1.x >= -0.5 - tolerance && end1.x <= tolerance,
+            "Fillet end x out of bounds: {}",
+            end1.x
+        );
+        assert!(
+            end1.y >= -1.0 - tolerance && end1.y <= 1.0 + tolerance,
+            "Fillet end y out of bounds: {}",
+            end1.y
+        );
     }
 }
