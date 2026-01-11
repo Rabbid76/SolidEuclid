@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
-use crate::sweeps::{Capsule, Cylinder, Torus};
+use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -425,6 +425,97 @@ pub fn create_cylinder(cylinder: JsValue) -> Result<WasmTriangularMesh, JsError>
     let triangular_mesh = cylinder
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create cylinder mesh: {:?}", e)))?;
+
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    Ok(WasmTriangularMesh {
+        material_ids,
+        geometries,
+    })
+}
+
+/// Creates a triangular mesh for a ConicalFrustum from a JavaScript object.
+///
+/// A conical frustum (truncated cone) supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Conical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Arguments
+/// * `frustum` - A JavaScript object representing a `ConicalFrustum` with the following fields:
+///   - `bottom_radius`: The radius at the bottom of the frustum (f64)
+///   - `top_radius`: The radius at the top of the frustum (f64)
+///   - `height`: The total height of the frustum (f64)
+///   - `segments`: Number of segments for tessellation (u32)
+///   - `bottom_edge`: Corner treatment for bottom edge (object with type)
+///   - `top_edge`: Corner treatment for top edge (object with type)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Conical frustum with sharp edges
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.25,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: "Edge",
+///   top_edge: "Edge",
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Conical frustum with chamfered edges
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.25,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: { Chamfer: { distance: 0.1 } },
+///   top_edge: { Chamfer: { distance: 0.1 } },
+///   material: { Array: ["bottom_cap", "bottom_edge", "body", "top_edge", "top_cap"] }
+/// });
+///
+/// // Cone (top_radius = 0)
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.0,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: "Edge",
+///   top_edge: "Edge",
+///   material: { Uniform: "default" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_conical_frustum(frustum: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let frustum: ConicalFrustum = serde_wasm_bindgen::from_value(frustum)
+        .map_err(|e| JsError::new(&format!("Failed to parse conical frustum: {}", e)))?;
+
+    let triangular_mesh = frustum
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create conical frustum mesh: {:?}", e)))?;
 
     let mut material_ids = Vec::new();
     let mut geometries = Vec::new();
@@ -1666,6 +1757,284 @@ mod tests {
             Material::Default,
         );
         let mesh = create_mesh_from_cylinder(cylinder);
+
+        // Smooth edges behave like sharp edges (no extra segments)
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    // =====================================================
+    // ConicalFrustum Tests
+    // =====================================================
+
+    /// Helper to create a WasmTriangularMesh from a ConicalFrustum directly
+    fn create_mesh_from_conical_frustum(frustum: ConicalFrustum) -> WasmTriangularMesh {
+        let triangular_mesh = frustum.to_triangular_mesh().unwrap();
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_conical_frustum_uniform_material() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+        assert!(geo.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_sharp_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Sharp edges: only 3 regions (bottom_cap, body, top_cap)
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_with_chamfer() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Chamfered edges: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_with_fillet() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Filleted edges: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_array_5_materials() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Array(vec![
+                "bottom_cap".to_string(),
+                "bottom_edge".to_string(),
+                "body".to_string(),
+                "top_edge".to_string(),
+                "top_cap".to_string(),
+            ]),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 5);
+        assert!(mesh.material_ids.contains(&"bottom_cap".to_string()));
+        assert!(mesh.material_ids.contains(&"bottom_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"body".to_string()));
+        assert!(mesh.material_ids.contains(&"top_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"top_cap".to_string()));
+    }
+
+    #[test]
+    fn test_create_conical_frustum_mixed_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Both edges have corners: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_one_edge_sharp() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // One sharp edge, one chamfered: 4 regions
+        assert_eq!(mesh.geometry_count(), 4);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_geometry_data_not_empty() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(!geo.vertices.is_empty());
+        assert!(!geo.normals.is_empty());
+        assert!(!geo.uvs.is_empty());
+        assert!(!geo.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_conical_frustum_geometry_data_sizes_consistent() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        let geo = mesh.geometries.get(0).unwrap();
+
+        // vertices and normals should have same length (3 components per vertex)
+        assert_eq!(geo.vertices.len(), geo.normals.len());
+        // uvs have 2 components per vertex, vertices have 3
+        assert_eq!(geo.uvs.len() * 3, geo.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_cone_shape() {
+        // Test a cone (top_radius = 0)
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.0,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_inverted_cone_shape() {
+        // Test an inverted cone (bottom_radius = 0)
+        let frustum = ConicalFrustum::new(
+            0.0,
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_equal_radii_is_cylinder_like() {
+        // When both radii are equal, it behaves like a cylinder
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Sharp edges: 3 regions
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_smooth_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::SmoothEdge,
+            Corner::SmoothEdge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
 
         // Smooth edges behave like sharp edges (no extra segments)
         assert_eq!(mesh.geometry_count(), 3);

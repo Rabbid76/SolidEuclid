@@ -432,31 +432,49 @@ impl PlanarProfile {
         outgoing_tangent: DVec2,
         radius: f64,
     ) -> Option<Nurbs> {
-        let incoming_normal = DVec2::new(-incoming_tangent.y, incoming_tangent.x);
-
-        // Determine which side the center should be on
+        // Determine which way the corner turns
+        // Cross product: positive = left turn (CCW), negative = right turn (CW)
         let cross =
             incoming_tangent.x * outgoing_tangent.y - incoming_tangent.y * outgoing_tangent.x;
         let sign = if cross > 0.0 { 1.0 } else { -1.0 };
 
-        let n1 = incoming_normal * sign;
-
-        // Find the fillet start and end points
+        // Calculate the half-angle between the tangent vectors
+        // θ = angle between incoming and outgoing
+        // half_theta = θ/2
         let dot = incoming_tangent.dot(outgoing_tangent);
-        let half_angle_arg = (1.0 - dot) / 2.0;
-        let half_angle = half_angle_arg.sqrt().asin();
+        let half_theta_sin_sq = (1.0 - dot) / 2.0;
+        let half_theta = half_theta_sin_sq.sqrt().asin();
 
-        // Skip fillet if angle is too small (collinear edges)
-        // Use 1e-6 threshold to handle floating point precision issues
-        // (1e-9 was too tight and caused huge offsets from near-zero tan values)
-        if half_angle.abs() < 1e-6 {
+        // The interior angle of the corner (on the fillet side) is α = π - θ
+        // So α/2 = π/2 - θ/2
+        // sin(α/2) = cos(θ/2)
+        // tan(α/2) = sin(α/2) / cos(α/2) = cos(θ/2) / sin(θ/2) = cot(θ/2) = 1 / tan(θ/2)
+        //
+        // For the inscribed circle:
+        // - Offset from corner to tangent point: r / tan(α/2) = r * tan(θ/2)
+        // - Distance from corner to center: r / sin(α/2) = r / cos(θ/2)
+
+        // Skip fillet if angle is too small (collinear edges) or too close to 180° (reflex)
+        if half_theta.abs() < 1e-6 || (PI / 2.0 - half_theta).abs() < 1e-6 {
             return None;
         }
 
-        let offset = radius / half_angle.tan();
+        let offset = radius * half_theta.tan();
         let start = corner_pos - incoming_tangent * offset;
         let end = corner_pos + outgoing_tangent * offset;
-        let center = start + n1 * radius;
+
+        // The fillet center is equidistant from both lines at distance radius.
+        // It lies at distance radius / cos(θ/2) from corner.
+        //
+        // The direction from corner to center is perpendicular to the angle bisector:
+        // - Angle bisector direction: (incoming + outgoing).normalize()
+        // - For a left turn (sign > 0): rotate bisector 90° CCW to get direction to center
+        // - For a right turn (sign < 0): rotate bisector 90° CW to get direction to center
+        let bisector = (incoming_tangent + outgoing_tangent).normalize_or_zero();
+        let direction_to_center = DVec2::new(-bisector.y, bisector.x) * sign;
+
+        let center_distance = radius / half_theta.cos();
+        let center = corner_pos + direction_to_center * center_distance;
 
         // Calculate sweep angle
         let start_angle = (start - center).y.atan2((start - center).x);
@@ -464,6 +482,8 @@ impl PlanarProfile {
         let mut sweep_angle = end_angle - start_angle;
 
         // Adjust sweep angle based on direction
+        // For left turn (sign > 0), the arc goes CCW (positive sweep) from start to end
+        // For right turn (sign < 0), the arc goes CW (negative sweep) from start to end
         if sign > 0.0 {
             // Counter-clockwise
             if sweep_angle < 0.0 {
@@ -2451,5 +2471,420 @@ mod tests {
             "Fillet end y out of bounds: {}",
             end1.y
         );
+    }
+
+    // ============================================================================
+    // Conical frustum profile tests - tests for profiles with diagonal lines
+    // ============================================================================
+
+    /// Creates a frustum-like profile with the given edge treatments.
+    /// The profile is: horizontal line (bottom cap) -> diagonal line (body) -> horizontal line (top cap)
+    /// This mimics the conical frustum cross-section used in sweeps.rs
+    fn create_frustum_profile(
+        bottom_radius: f64,
+        top_radius: f64,
+        half_height: f64,
+        bottom_edge: Corner,
+        top_edge: Corner,
+    ) -> PlanarProfile {
+        let max_radius = bottom_radius.max(top_radius);
+        let bottom_x = -(max_radius - bottom_radius);
+        let top_x = -(max_radius - top_radius);
+
+        let bottom_center = DVec2::new(-max_radius, -half_height);
+        let bottom_surface = DVec2::new(bottom_x, -half_height);
+        let top_surface = DVec2::new(top_x, half_height);
+        let top_center = DVec2::new(-max_radius, half_height);
+
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: bottom_center,
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: bottom_surface,
+                },
+                bottom_edge,
+            ),
+            ProfileCommand::new(PathCommand::Line { point: top_surface }, top_edge),
+            ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
+        ])
+    }
+
+    #[test]
+    fn test_frustum_profile_no_edges() {
+        // Test frustum profile with no fillets/chamfers
+        let profile = create_frustum_profile(0.5, 0.25, 1.0, Corner::Edge, Corner::Edge);
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(
+            curve.segments.len(),
+            3,
+            "Expected 3 segments for no-edge frustum"
+        );
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_small_taper() {
+        // Small taper: bottom_radius=0.5, top_radius=0.4
+        let fillet_radius = 0.1;
+        let profile = create_frustum_profile(
+            0.5,
+            0.4,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with fillets");
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_large_taper() {
+        // Large taper: bottom_radius=0.5, top_radius=0.1
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.5,
+            0.1,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with fillets");
+
+        // Verify segments are connected - this is the key test for the bug
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_cone() {
+        // Cone shape: bottom_radius=0.5, top_radius=0.0 (apex)
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.5,
+            0.0,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_inverted_cone() {
+        // Inverted cone: bottom_radius=0.0, top_radius=0.5
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.0,
+            0.5,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_positions() {
+        // Test that fillet positions are geometrically correct
+        // Bottom: horizontal line, then diagonal at 45 degrees (roughly)
+        // The fillet should be inscribed in the corner
+        let bottom_radius = 0.5;
+        let top_radius = 0.25;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Edge,
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Should have 4 segments: bottom cap, bottom fillet, body, top cap
+        assert_eq!(curve.segments.len(), 4, "Expected 4 segments");
+
+        // The fillet (segment 1) should be tangent to both the bottom cap and the body
+        let fillet_seg = &curve.segments[1];
+        let fillet_start = fillet_seg.nurbs.start_point();
+        let fillet_end = fillet_seg.nurbs.end_point();
+
+        // Bottom cap segment (0) should end where fillet starts
+        let bottom_cap_end = curve.segments[0].nurbs.end_point();
+        assert!(
+            (bottom_cap_end - fillet_start).length() < 1e-6,
+            "Bottom cap should connect to fillet start: cap_end={:?}, fillet_start={:?}",
+            bottom_cap_end,
+            fillet_start
+        );
+
+        // Body segment (2) should start where fillet ends
+        let body_start = curve.segments[2].nurbs.start_point();
+        assert!(
+            (body_start - fillet_end).length() < 1e-6,
+            "Body should connect to fillet end: body_start={:?}, fillet_end={:?}",
+            body_start,
+            fillet_end
+        );
+
+        // Fillet start should be on the horizontal line (y = -half_height)
+        assert!(
+            (fillet_start.y - (-half_height)).abs() < 1e-6,
+            "Fillet start should be on bottom horizontal: y={}",
+            fillet_start.y
+        );
+
+        // The body segment is now truncated. Its end point should be on the original diagonal
+        // but the start point (fillet_end) might not be exactly on the original line
+        // because the fillet inscribes a circle that is tangent to both edges.
+        // The key check is that all segments are connected.
+
+        // Verify segments are connected (this is the important geometric property)
+        verify_segment_connectivity(curve, 1e-6);
+
+        // Check that the fillet is an arc (has proper arc properties)
+        // The arc should have the specified radius
+        // We can check this by verifying the midpoint is at radius distance from start/end chord
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_tangent_continuity() {
+        // Test that fillets are tangent to adjacent segments
+        let bottom_radius = 0.5;
+        let top_radius = 0.1;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Should have 5 segments: bottom cap, bottom fillet, body, top fillet, top cap
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments");
+
+        // Check tangent continuity at bottom fillet
+        let bottom_cap_end_tangent = curve.segments[0].nurbs.derivative(1.0).normalize_or_zero();
+        let fillet_start_tangent = curve.segments[1].nurbs.derivative(0.0).normalize_or_zero();
+
+        // Tangents should be parallel (dot product close to 1 or -1)
+        let dot = bottom_cap_end_tangent.dot(fillet_start_tangent);
+        assert!(
+            dot.abs() > 0.99,
+            "Bottom cap and fillet should be tangent: dot={}, cap_tan={:?}, fillet_tan={:?}",
+            dot,
+            bottom_cap_end_tangent,
+            fillet_start_tangent
+        );
+
+        // Check tangent continuity at bottom fillet to body
+        let fillet_end_tangent = curve.segments[1].nurbs.derivative(1.0).normalize_or_zero();
+        let body_start_tangent = curve.segments[2].nurbs.derivative(0.0).normalize_or_zero();
+
+        let dot2 = fillet_end_tangent.dot(body_start_tangent);
+        assert!(
+            dot2.abs() > 0.99,
+            "Fillet and body should be tangent: dot={}, fillet_tan={:?}, body_tan={:?}",
+            dot2,
+            fillet_end_tangent,
+            body_start_tangent
+        );
+
+        // Check tangent continuity at top fillet
+        let body_end_tangent = curve.segments[2].nurbs.derivative(1.0).normalize_or_zero();
+        let top_fillet_start_tangent = curve.segments[3].nurbs.derivative(0.0).normalize_or_zero();
+
+        let dot3 = body_end_tangent.dot(top_fillet_start_tangent);
+        assert!(
+            dot3.abs() > 0.99,
+            "Body and top fillet should be tangent: dot={}, body_tan={:?}, fillet_tan={:?}",
+            dot3,
+            body_end_tangent,
+            top_fillet_start_tangent
+        );
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_radius_verification() {
+        // Verify that the fillet arc has the correct radius
+        let bottom_radius = 0.5;
+        let top_radius = 0.25;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Edge,
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Get the fillet segment
+        let fillet_seg = &curve.segments[1];
+        let fillet_nurbs = &fillet_seg.nurbs;
+
+        // Sample points along the fillet and verify they're all at radius distance from center
+        // The center can be found as the intersection of perpendiculars from start and end
+        let start = fillet_nurbs.start_point();
+        let end = fillet_nurbs.end_point();
+        let mid = fillet_nurbs.evaluate(0.5);
+
+        // For an arc, all points should be equidistant from the center
+        // We can estimate the center from three points
+        // Using the circumcircle formula
+        let d = 2.0
+            * (start.x * (mid.y - end.y) + mid.x * (end.y - start.y) + end.x * (start.y - mid.y));
+        if d.abs() > 1e-10 {
+            let center_x = ((start.x * start.x + start.y * start.y) * (mid.y - end.y)
+                + (mid.x * mid.x + mid.y * mid.y) * (end.y - start.y)
+                + (end.x * end.x + end.y * end.y) * (start.y - mid.y))
+                / d;
+            let center_y = ((start.x * start.x + start.y * start.y) * (end.x - mid.x)
+                + (mid.x * mid.x + mid.y * mid.y) * (start.x - end.x)
+                + (end.x * end.x + end.y * end.y) * (mid.x - start.x))
+                / d;
+            let center = DVec2::new(center_x, center_y);
+
+            let r_start = (start - center).length();
+            let r_mid = (mid - center).length();
+            let r_end = (end - center).length();
+
+            // All radii should be approximately equal to fillet_radius
+            let tolerance = 1e-4;
+            assert!(
+                (r_start - fillet_radius).abs() < tolerance,
+                "Start radius {} should be {}",
+                r_start,
+                fillet_radius
+            );
+            assert!(
+                (r_mid - fillet_radius).abs() < tolerance,
+                "Mid radius {} should be {}",
+                r_mid,
+                fillet_radius
+            );
+            assert!(
+                (r_end - fillet_radius).abs() < tolerance,
+                "End radius {} should be {}",
+                r_end,
+                fillet_radius
+            );
+        }
+    }
+
+    #[test]
+    fn test_frustum_profile_chamfer_positions() {
+        // Test chamfer positions on frustum profile
+        let bottom_radius = 0.5;
+        let top_radius = 0.1;
+        let half_height = 1.0;
+        let chamfer_distance = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with chamfers");
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+
+        // Chamfer should be a straight line
+        let bottom_chamfer = &curve.segments[1];
+        // A chamfer NURBS should be a line (2 control points)
+        assert!(
+            bottom_chamfer.nurbs.control_points.len() <= 2,
+            "Chamfer should be a line"
+        );
+    }
+
+    /// Helper function to verify all segments in a curve are connected end-to-end
+    fn verify_segment_connectivity(curve: &Curve, tolerance: f64) {
+        for i in 0..curve.segments.len() - 1 {
+            let end_of_current = curve.segments[i].nurbs.end_point();
+            let start_of_next = curve.segments[i + 1].nurbs.start_point();
+            let gap = (end_of_current - start_of_next).length();
+            assert!(
+                gap < tolerance,
+                "Gap between segment {} and {}: {:?} to {:?}, gap = {}",
+                i,
+                i + 1,
+                end_of_current,
+                start_of_next,
+                gap
+            );
+        }
     }
 }

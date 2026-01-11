@@ -20,6 +20,7 @@ import init, {
   create_torus,
   create_capsule,
   create_cylinder,
+  create_conical_frustum,
   WasmTriangularMesh,
 } from '@solid-euclid';
 import {
@@ -30,7 +31,7 @@ import {
 } from '../util/three-util';
 
 type ViewMode = 'geometry' | 'solid' | 'wireframe';
-type SweepType = 'Torus' | 'Capsule' | 'Cylinder';
+type SweepType = 'Torus' | 'Capsule' | 'Cylinder' | 'ConicalFrustum';
 type EdgeType = 'Edge' | 'SmoothEdge' | 'Chamfer' | 'Fillet';
 
 // Material ID for uniform material (torus)
@@ -41,6 +42,9 @@ const CAPSULE_MATERIALS = ['bottom', 'body', 'top'];
 
 // Material IDs for cylinder (5 regions)
 const CYLINDER_MATERIALS = ['bottom_cap', 'bottom_edge', 'body', 'top_edge', 'top_cap'];
+
+// Material IDs for conical frustum (5 regions)
+const CONICAL_FRUSTUM_MATERIALS = ['bottom_cap', 'bottom_edge', 'body', 'top_edge', 'top_cap'];
 
 interface TorusConfig {
   majorRadius: number;
@@ -74,6 +78,16 @@ interface SweepConfig {
   torus: TorusConfig;
   capsule: CapsuleConfig;
   cylinder: CylinderConfig;
+  conicalFrustum: ConicalFrustumConfig;
+}
+
+interface ConicalFrustumConfig {
+  bottomRadius: number;
+  topRadius: number;
+  height: number;
+  segments: number;
+  bottomEdge: EdgeConfig;
+  topEdge: EdgeConfig;
 }
 
 async function main() {
@@ -198,6 +212,22 @@ async function main() {
     );
   });
 
+  // Create materials for conical frustum using textures (5 regions, cycle through textures)
+  const conicalFrustumMaterials: Map<string, MeshStandardMaterial> = new Map();
+  CONICAL_FRUSTUM_MATERIALS.forEach((id, index) => {
+    conicalFrustumMaterials.set(
+      id,
+      new MeshStandardMaterial({
+        map: textures[index % textures.length],
+        roughness: 0.5,
+        metalness: 0.0,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      })
+    );
+  });
+
   // State
   let currentConfig: SweepConfig = {
     type: 'Torus',
@@ -214,6 +244,14 @@ async function main() {
     },
     cylinder: {
       radius: 0.5,
+      height: 1.5,
+      segments: 24,
+      bottomEdge: { type: 'Edge', chamferDistance: 0.1, filletRadius: 0.1 },
+      topEdge: { type: 'Edge', chamferDistance: 0.1, filletRadius: 0.1 },
+    },
+    conicalFrustum: {
+      bottomRadius: 0.5,
+      topRadius: 0.25,
       height: 1.5,
       segments: 24,
       bottomEdge: { type: 'Edge', chamferDistance: 0.1, filletRadius: 0.1 },
@@ -397,6 +435,61 @@ async function main() {
   }
 
   /**
+   * Creates the geometry and mesh objects for a conical frustum
+   */
+  function createConicalFrustumObjects(config: ConicalFrustumConfig): {
+    mergedGeometry: BufferGeometry;
+    meshGroup: Group;
+    wireframe: Group;
+  } {
+    // Create conical frustum with Array material to get 5 separate geometry groups
+    const wasmMesh: WasmTriangularMesh = create_conical_frustum({
+      bottom_radius: config.bottomRadius,
+      top_radius: config.topRadius,
+      height: config.height,
+      segments: config.segments,
+      bottom_edge: edgeConfigToWasm(config.bottomEdge),
+      top_edge: edgeConfigToWasm(config.topEdge),
+      material: {
+        Array: CONICAL_FRUSTUM_MATERIALS,
+      },
+    });
+
+    // Create a group to hold meshes
+    const meshGroup = new Group();
+    const geometries: BufferGeometry[] = [];
+
+    // Create a mesh for each material in the mesh (bottom_cap, bottom_edge, body, top_edge, top_cap)
+    const materialIds = wasmMesh.material_ids as string[];
+    for (let i = 0; i < wasmMesh.geometry_count; i++) {
+      const wasmGeometry = wasmMesh.get_geometry(i);
+      if (wasmGeometry) {
+        const geometry = createBufferGeometryFromWasm(wasmGeometry);
+        geometries.push(geometry);
+
+        // Select material based on material ID
+        const materialId = materialIds[i] ?? '';
+        const material = conicalFrustumMaterials.get(materialId) ?? solidMaterial;
+
+        const mesh = new Mesh(geometry, material);
+        meshGroup.add(mesh);
+      }
+    }
+
+    // Create merged geometry for wireframe visualization
+    const mergedGeometry = mergeBufferGeometries(geometries);
+
+    // Create wireframe visualization group
+    const wireframe = new Group();
+    const wireframeEdges = createWireframeEdges(mergedGeometry);
+    wireframe.add(wireframeEdges);
+    const vertexNormals = createVertexNormals(mergedGeometry, 0.1);
+    wireframe.add(vertexNormals);
+
+    return { mergedGeometry, meshGroup, wireframe };
+  }
+
+  /**
    * Creates the geometry and mesh objects for the current sweep configuration
    */
   function createSweepObjects(config: SweepConfig): {
@@ -411,6 +504,8 @@ async function main() {
         return createCapsuleObjects(config.capsule);
       case 'Cylinder':
         return createCylinderObjects(config.cylinder);
+      case 'ConicalFrustum':
+        return createConicalFrustumObjects(config.conicalFrustum);
       default:
         throw new Error(`Unknown sweep type: ${config.type}`);
     }
@@ -455,6 +550,16 @@ async function main() {
         edgeConfigsEqual(a.cylinder.topEdge, b.cylinder.topEdge)
       );
     }
+    if (a.type === 'ConicalFrustum' && b.type === 'ConicalFrustum') {
+      return (
+        a.conicalFrustum.bottomRadius === b.conicalFrustum.bottomRadius &&
+        a.conicalFrustum.topRadius === b.conicalFrustum.topRadius &&
+        a.conicalFrustum.height === b.conicalFrustum.height &&
+        a.conicalFrustum.segments === b.conicalFrustum.segments &&
+        edgeConfigsEqual(a.conicalFrustum.bottomEdge, b.conicalFrustum.bottomEdge) &&
+        edgeConfigsEqual(a.conicalFrustum.topEdge, b.conicalFrustum.topEdge)
+      );
+    }
     return true;
   }
 
@@ -486,6 +591,11 @@ async function main() {
         ...config.cylinder,
         bottomEdge: { ...config.cylinder.bottomEdge },
         topEdge: { ...config.cylinder.topEdge },
+      },
+      conicalFrustum: {
+        ...config.conicalFrustum,
+        bottomEdge: { ...config.conicalFrustum.bottomEdge },
+        topEdge: { ...config.conicalFrustum.topEdge },
       },
     };
 
@@ -523,6 +633,7 @@ async function main() {
     const torusOptions = document.getElementById('torusOptions');
     const capsuleOptions = document.getElementById('capsuleOptions');
     const cylinderOptions = document.getElementById('cylinderOptions');
+    const conicalFrustumOptions = document.getElementById('conicalFrustumOptions');
     if (torusOptions) {
       torusOptions.style.display = sweepType === 'Torus' ? 'flex' : 'none';
     }
@@ -532,14 +643,21 @@ async function main() {
     if (cylinderOptions) {
       cylinderOptions.style.display = sweepType === 'Cylinder' ? 'flex' : 'none';
     }
+    if (conicalFrustumOptions) {
+      conicalFrustumOptions.style.display = sweepType === 'ConicalFrustum' ? 'flex' : 'none';
+    }
   }
 
   /**
    * Updates edge parameter UI visibility based on edge type
    */
-  function updateEdgeUIVisibility(position: 'bottom' | 'top', edgeType: EdgeType) {
-    const chamferLabel = document.getElementById(`${position}ChamferDistanceLabel`);
-    const filletLabel = document.getElementById(`${position}FilletRadiusLabel`);
+  function updateEdgeUIVisibility(
+    position: 'bottom' | 'top',
+    edgeType: EdgeType,
+    prefix: string = ''
+  ) {
+    const chamferLabel = document.getElementById(`${prefix}${position}ChamferDistanceLabel`);
+    const filletLabel = document.getElementById(`${prefix}${position}FilletRadiusLabel`);
     if (chamferLabel) {
       chamferLabel.style.display = edgeType === 'Chamfer' ? 'flex' : 'none';
     }
@@ -579,6 +697,35 @@ async function main() {
   const bottomFilletRadiusValue = document.getElementById('bottomFilletRadiusValue');
   const topChamferDistanceValue = document.getElementById('topChamferDistanceValue');
   const topFilletRadiusValue = document.getElementById('topFilletRadiusValue');
+
+  // Conical Frustum inputs
+  const frustumBottomRadiusInput = document.getElementById(
+    'frustumBottomRadius'
+  ) as HTMLInputElement;
+  const frustumTopRadiusInput = document.getElementById('frustumTopRadius') as HTMLInputElement;
+  const frustumHeightInput = document.getElementById('frustumHeight') as HTMLInputElement;
+  const frustumSegmentsInput = document.getElementById('frustumSegments') as HTMLInputElement;
+  const frustumBottomEdgeSelect = document.getElementById('frustumBottomEdge') as HTMLSelectElement;
+  const frustumTopEdgeSelect = document.getElementById('frustumTopEdge') as HTMLSelectElement;
+  const frustumBottomChamferDistanceInput = document.getElementById(
+    'frustumBottomChamferDistance'
+  ) as HTMLInputElement;
+  const frustumBottomFilletRadiusInput = document.getElementById(
+    'frustumBottomFilletRadius'
+  ) as HTMLInputElement;
+  const frustumTopChamferDistanceInput = document.getElementById(
+    'frustumTopChamferDistance'
+  ) as HTMLInputElement;
+  const frustumTopFilletRadiusInput = document.getElementById(
+    'frustumTopFilletRadius'
+  ) as HTMLInputElement;
+  const frustumBottomChamferDistanceValue = document.getElementById(
+    'frustumBottomChamferDistanceValue'
+  );
+  const frustumBottomFilletRadiusValue = document.getElementById('frustumBottomFilletRadiusValue');
+  const frustumTopChamferDistanceValue = document.getElementById('frustumTopChamferDistanceValue');
+  const frustumTopFilletRadiusValue = document.getElementById('frustumTopFilletRadiusValue');
+
   const viewModeSelect = document.getElementById('viewMode') as HTMLSelectElement;
 
   function rebuildSweep() {
@@ -600,6 +747,19 @@ async function main() {
     const topChamferDistance = parseFloat(topChamferDistanceInput?.value) || 0.1;
     const topFilletRadius = parseFloat(topFilletRadiusInput?.value) || 0.1;
 
+    // Conical Frustum values
+    const frustumBottomRadius = parseFloat(frustumBottomRadiusInput?.value) || 0.5;
+    const frustumTopRadius = parseFloat(frustumTopRadiusInput?.value) || 0.25;
+    const frustumHeight = parseFloat(frustumHeightInput?.value) || 1.5;
+    const frustumSegments = parseInt(frustumSegmentsInput?.value, 10) || 24;
+    const frustumBottomEdgeType = (frustumBottomEdgeSelect?.value || 'Edge') as EdgeType;
+    const frustumTopEdgeType = (frustumTopEdgeSelect?.value || 'Edge') as EdgeType;
+    const frustumBottomChamferDistance =
+      parseFloat(frustumBottomChamferDistanceInput?.value) || 0.1;
+    const frustumBottomFilletRadius = parseFloat(frustumBottomFilletRadiusInput?.value) || 0.1;
+    const frustumTopChamferDistance = parseFloat(frustumTopChamferDistanceInput?.value) || 0.1;
+    const frustumTopFilletRadius = parseFloat(frustumTopFilletRadiusInput?.value) || 0.1;
+
     setSweepConfig({
       type,
       torus: { majorRadius, minorRadius, majorSegments, minorSegments },
@@ -617,6 +777,22 @@ async function main() {
           type: topEdgeType,
           chamferDistance: topChamferDistance,
           filletRadius: topFilletRadius,
+        },
+      },
+      conicalFrustum: {
+        bottomRadius: frustumBottomRadius,
+        topRadius: frustumTopRadius,
+        height: frustumHeight,
+        segments: frustumSegments,
+        bottomEdge: {
+          type: frustumBottomEdgeType,
+          chamferDistance: frustumBottomChamferDistance,
+          filletRadius: frustumBottomFilletRadius,
+        },
+        topEdge: {
+          type: frustumTopEdgeType,
+          chamferDistance: frustumTopChamferDistance,
+          filletRadius: frustumTopFilletRadius,
         },
       },
     });
@@ -715,6 +891,73 @@ async function main() {
     topFilletRadiusInput.addEventListener('input', () => {
       if (topFilletRadiusValue) {
         topFilletRadiusValue.textContent = topFilletRadiusInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  // Conical Frustum event listeners
+  if (frustumBottomRadiusInput) {
+    frustumBottomRadiusInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (frustumTopRadiusInput) {
+    frustumTopRadiusInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (frustumHeightInput) {
+    frustumHeightInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (frustumSegmentsInput) {
+    frustumSegmentsInput.addEventListener('change', rebuildSweep);
+  }
+
+  if (frustumBottomEdgeSelect) {
+    frustumBottomEdgeSelect.addEventListener('change', () => {
+      updateEdgeUIVisibility('bottom', frustumBottomEdgeSelect.value as EdgeType, 'frustum');
+      rebuildSweep();
+    });
+  }
+
+  if (frustumTopEdgeSelect) {
+    frustumTopEdgeSelect.addEventListener('change', () => {
+      updateEdgeUIVisibility('top', frustumTopEdgeSelect.value as EdgeType, 'frustum');
+      rebuildSweep();
+    });
+  }
+
+  if (frustumBottomChamferDistanceInput) {
+    frustumBottomChamferDistanceInput.addEventListener('input', () => {
+      if (frustumBottomChamferDistanceValue) {
+        frustumBottomChamferDistanceValue.textContent = frustumBottomChamferDistanceInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (frustumBottomFilletRadiusInput) {
+    frustumBottomFilletRadiusInput.addEventListener('input', () => {
+      if (frustumBottomFilletRadiusValue) {
+        frustumBottomFilletRadiusValue.textContent = frustumBottomFilletRadiusInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (frustumTopChamferDistanceInput) {
+    frustumTopChamferDistanceInput.addEventListener('input', () => {
+      if (frustumTopChamferDistanceValue) {
+        frustumTopChamferDistanceValue.textContent = frustumTopChamferDistanceInput.value;
+      }
+      rebuildSweep();
+    });
+  }
+
+  if (frustumTopFilletRadiusInput) {
+    frustumTopFilletRadiusInput.addEventListener('input', () => {
+      if (frustumTopFilletRadiusValue) {
+        frustumTopFilletRadiusValue.textContent = frustumTopFilletRadiusInput.value;
       }
       rebuildSweep();
     });

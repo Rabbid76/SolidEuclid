@@ -74,6 +74,7 @@
           <option value="Torus" selected>Torus</option>
           <option value="Capsule">Capsule</option>
           <option value="Cylinder">Cylinder</option>
+          <option value="ConicalFrustum">Conical Frustum</option>
         </select>
       </label>
       <div id="torusOptions" class="sweep-options">
@@ -179,6 +180,97 @@
           Fillet Radius:
           <input type="range" id="topFilletRadius" value="0.1" min="0.01" max="0.3" step="0.01" />
           <span id="topFilletRadiusValue">0.1</span>
+        </label>
+      </div>
+      <div id="conicalFrustumOptions" class="sweep-options" style="display: none">
+        <label>
+          Bottom Radius:
+          <input
+            type="number"
+            id="frustumBottomRadius"
+            value="0.5"
+            min="0.0"
+            max="2.0"
+            step="0.05"
+          />
+        </label>
+        <label>
+          Top Radius:
+          <input type="number" id="frustumTopRadius" value="0.25" min="0.0" max="2.0" step="0.05" />
+        </label>
+        <label>
+          Height:
+          <input type="number" id="frustumHeight" value="1.5" min="0.1" max="5.0" step="0.1" />
+        </label>
+        <label>
+          Segments:
+          <input type="number" id="frustumSegments" value="24" min="3" max="64" />
+        </label>
+        <label>
+          Bottom Edge:
+          <select id="frustumBottomEdge">
+            <option value="Edge" selected>Sharp Edge</option>
+            <option value="SmoothEdge">Smooth Edge</option>
+            <option value="Chamfer">Chamfer</option>
+            <option value="Fillet">Fillet</option>
+          </select>
+        </label>
+        <label id="frustumbottomChamferDistanceLabel" style="display: none">
+          Chamfer Distance:
+          <input
+            type="range"
+            id="frustumBottomChamferDistance"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="frustumBottomChamferDistanceValue">0.1</span>
+        </label>
+        <label id="frustumbottomFilletRadiusLabel" style="display: none">
+          Fillet Radius:
+          <input
+            type="range"
+            id="frustumBottomFilletRadius"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="frustumBottomFilletRadiusValue">0.1</span>
+        </label>
+        <label>
+          Top Edge:
+          <select id="frustumTopEdge">
+            <option value="Edge" selected>Sharp Edge</option>
+            <option value="SmoothEdge">Smooth Edge</option>
+            <option value="Chamfer">Chamfer</option>
+            <option value="Fillet">Fillet</option>
+          </select>
+        </label>
+        <label id="frustumtopChamferDistanceLabel" style="display: none">
+          Chamfer Distance:
+          <input
+            type="range"
+            id="frustumTopChamferDistance"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="frustumTopChamferDistanceValue">0.1</span>
+        </label>
+        <label id="frustumtopFilletRadiusLabel" style="display: none">
+          Fillet Radius:
+          <input
+            type="range"
+            id="frustumTopFilletRadius"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="frustumTopFilletRadiusValue">0.1</span>
         </label>
       </div>
       <label>

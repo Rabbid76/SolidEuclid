@@ -13,6 +13,48 @@ use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
+/// Gets the effective radius/distance of an edge corner treatment.
+///
+/// # Arguments
+/// * `corner` - The corner treatment to get the size of
+///
+/// # Returns
+/// The radius for fillets, distance for chamfers, or 0.0 for edges
+fn get_edge_radius(corner: &Corner) -> f64 {
+    match corner {
+        Corner::Edge | Corner::SmoothEdge => 0.0,
+        Corner::Chamfer { distance } => *distance,
+        Corner::Fillet { radius } => *radius,
+    }
+}
+
+/// Applies the standard 5-region material mapping to a polygon mesh.
+///
+/// Maps segment IDs to: bottom cap (0), bottom edge (1), body (2), top edge (3), top cap (4).
+///
+/// # Arguments
+/// * `mesh` - The mesh to update
+/// * `material` - The material to apply
+fn apply_frustum_material_mapping(mesh: &mut PolygonMesh, material: &Material) {
+    for polygon in &mut mesh.polygons {
+        let segment_id = polygon.geometry_id;
+        polygon.geometry_id = match segment_id {
+            0 => 0, // bottom cap
+            1 => 1, // bottom edge
+            2 => 2, // body
+            3 => 3, // top edge
+            4 => 4, // top cap
+            _ => segment_id % 5,
+        };
+    }
+
+    mesh.material_map.clear();
+    for face_index in 0..5 {
+        let material_name = material.get_material_for_face(face_index, 5);
+        mesh.set_material(face_index, material_name);
+    }
+}
+
 /// Represents a torus (donut shape) defined by major and minor radii.
 ///
 /// A torus is created by sweeping a circular profile (minor circle) along
@@ -543,6 +585,134 @@ impl Cylinder {
         }
     }
 
+    /// Converts this cylinder to an equivalent `ConicalFrustum`.
+    ///
+    /// A cylinder is a special case of a conical frustum where both radii are equal.
+    ///
+    /// # Returns
+    /// A `ConicalFrustum` with the same geometry as this cylinder
+    pub fn to_conical_frustum(&self) -> ConicalFrustum {
+        ConicalFrustum::new(
+            self.radius,
+            self.radius,
+            self.height,
+            self.segments,
+            self.bottom_edge,
+            self.top_edge,
+            self.material.clone(),
+        )
+    }
+}
+
+impl GeometryModel for Cylinder {
+    /// Converts the cylinder to a polygon mesh.
+    ///
+    /// This method delegates to `ConicalFrustum::to_polygon_mesh` since a cylinder
+    /// is a special case of a conical frustum where both radii are equal.
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the cylinder,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The radius is invalid (zero or negative)
+    /// - The height is invalid (zero or negative)
+    /// - The segment count is less than 3
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Validate that radius is positive (cylinder-specific constraint)
+        if self.radius <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "radius".to_string(),
+                message: "Radius must be positive".to_string(),
+            });
+        }
+        // Delegate to ConicalFrustum implementation
+        self.to_conical_frustum().to_polygon_mesh()
+    }
+}
+
+/// Represents a conical frustum (truncated cone) defined by bottom radius, top radius, height, and edge treatments.
+///
+/// A conical frustum is created by sweeping a profile (horizontal line + diagonal line + horizontal line)
+/// along a circular path. The frustum is oriented along the Y-axis, with the center at the origin.
+///
+/// The conical frustum supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Conical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Example
+/// ```
+/// use solid_euclid::sweeps::ConicalFrustum;
+/// use solid_euclid::material::Material;
+/// use solid_euclid::planar_profile::Corner;
+///
+/// let frustum = ConicalFrustum::new(
+///     0.5,           // bottom_radius
+///     0.25,          // top_radius
+///     2.0,           // height
+///     24,            // segments
+///     Corner::Edge,  // bottom_edge
+///     Corner::Edge,  // top_edge
+///     Material::Default,
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConicalFrustum {
+    /// The radius at the bottom of the frustum.
+    pub bottom_radius: f64,
+    /// The radius at the top of the frustum.
+    pub top_radius: f64,
+    /// The total height of the frustum.
+    pub height: f64,
+    /// The number of segments for tessellation around the circumference.
+    pub segments: u32,
+    /// The corner treatment at the bottom edge.
+    pub bottom_edge: Corner,
+    /// The corner treatment at the top edge.
+    pub top_edge: Corner,
+    /// The material assignment for the frustum surfaces.
+    pub material: Material,
+}
+
+impl ConicalFrustum {
+    /// Creates a new `ConicalFrustum` with the given parameters.
+    ///
+    /// # Arguments
+    /// * `bottom_radius` - The radius at the bottom of the frustum
+    /// * `top_radius` - The radius at the top of the frustum
+    /// * `height` - The total height of the frustum
+    /// * `segments` - The number of segments for tessellation
+    /// * `bottom_edge` - The corner treatment at the bottom edge
+    /// * `top_edge` - The corner treatment at the top edge
+    /// * `material` - The material assignment for the surfaces
+    ///
+    /// # Panics
+    /// This function does not panic, but invalid parameters will result in
+    /// errors when generating the mesh.
+    pub fn new(
+        bottom_radius: f64,
+        top_radius: f64,
+        height: f64,
+        segments: u32,
+        bottom_edge: Corner,
+        top_edge: Corner,
+        material: Material,
+    ) -> Self {
+        Self {
+            bottom_radius,
+            top_radius,
+            height,
+            segments,
+            bottom_edge,
+            top_edge,
+            material,
+        }
+    }
+
     /// Creates a circular path profile (same as Torus).
     ///
     /// # Arguments
@@ -551,43 +721,41 @@ impl Cylinder {
         Torus::create_circle_profile(radius)
     }
 
-    /// Gets the effective radius of an edge corner.
-    fn get_edge_radius(corner: &Corner) -> f64 {
-        match corner {
-            Corner::Edge | Corner::SmoothEdge => 0.0,
-            Corner::Chamfer { distance } => *distance,
-            Corner::Fillet { radius } => *radius,
-        }
-    }
-
-    /// Creates a `SweepModel` from this cylinder.
+    /// Creates a `SweepModel` from this conical frustum.
     ///
     /// The sweep model uses:
-    /// - A circular path (the revolution around Y-axis)
-    /// - A cylinder profile (horizontal line at bottom + vertical line + horizontal line at top)
+    /// - A circular path (the revolution around Y-axis) using the larger radius
+    /// - A frustum profile (horizontal line at bottom + diagonal line + horizontal line at top)
     /// - Sample distances calculated from the geometry and segment count
     ///
     /// # Returns
-    /// A `SweepModel` that can be used to generate the cylinder geometry
-    fn to_sweep_model(&self) -> SweepModel<PlanarProfile, PlanarProfile> {
+    /// A `SweepModel` that can be used to generate the frustum geometry
+    pub(crate) fn to_sweep_model(&self) -> SweepModel<PlanarProfile, PlanarProfile> {
         let half_height = self.height / 2.0;
+        let max_radius = self.bottom_radius.max(self.top_radius);
 
         // The path creates the revolution around the Y-axis
-        let path = Self::create_circle_path(self.radius);
+        // Use the larger radius as the path radius
+        let path = Self::create_circle_path(max_radius);
 
-        // Profile is the cylinder cross-section with edge treatments
-        let profile = self.create_cylinder_profile(half_height);
+        // Profile is the frustum cross-section with edge treatments
+        let profile = self.create_frustum_profile(half_height, max_radius);
 
         // Calculate sample distances
-        let path_circumference = 2.0 * PI * self.radius;
+        let path_circumference = 2.0 * PI * max_radius;
         let path_sample_distance = path_circumference / self.segments as f64;
 
-        // Profile length depends on edges
-        let bottom_edge_size = Self::get_edge_radius(&self.bottom_edge);
-        let top_edge_size = Self::get_edge_radius(&self.top_edge);
+        // Profile length depends on edges and the diagonal
+        let bottom_edge_size = get_edge_radius(&self.bottom_edge);
+        let top_edge_size = get_edge_radius(&self.top_edge);
         let body_height = self.height - bottom_edge_size - top_edge_size;
-        let profile_length =
-            self.radius * 2.0 + body_height.max(0.0) + bottom_edge_size + top_edge_size;
+        let radius_diff = (self.bottom_radius - self.top_radius).abs();
+        let diagonal_length = (body_height.powi(2) + radius_diff.powi(2)).sqrt();
+        let profile_length = self.bottom_radius
+            + self.top_radius
+            + diagonal_length.max(0.0)
+            + bottom_edge_size
+            + top_edge_size;
         let profile_segments = self.segments / 2;
         let profile_sample_distance = profile_length / profile_segments.max(1) as f64;
 
@@ -600,30 +768,39 @@ impl Cylinder {
         )
     }
 
-    /// Creates the cylinder profile with edge treatments.
+    /// Creates the frustum profile with edge treatments.
     ///
     /// The profile is:
     /// - Horizontal line from axis to edge at bottom (bottom cap)
     /// - Bottom edge corner treatment
-    /// - Vertical line up the body
+    /// - Diagonal line up the body (from bottom_radius to top_radius)
     /// - Top edge corner treatment
     /// - Horizontal line from edge to axis at top (top cap)
     ///
     /// # Arguments
-    /// * `half_height` - Half the total height of the cylinder
-    fn create_cylinder_profile(&self, half_height: f64) -> PlanarProfile {
+    /// * `half_height` - Half the total height of the frustum
+    /// * `max_radius` - The larger of the two radii (used as path radius offset)
+    pub(crate) fn create_frustum_profile(
+        &self,
+        half_height: f64,
+        max_radius: f64,
+    ) -> PlanarProfile {
         // Profile coordinates in sweep model:
         // - Profile X maps to radial direction from path center
         // - Profile Y maps to perpendicular direction (Y-axis in 3D)
         //
-        // Since path has radius R, and we want the cylinder surface at radial = R,
-        // we need profile X to go from -R (at axis) to 0 (at surface)
+        // Since path has radius max_radius, and we want the bottom surface at radial = bottom_radius,
+        // we need profile X to go from -(max_radius) (at axis) to -(max_radius - bottom_radius) (at bottom surface)
+        // and similarly for top
 
-        // The 4 corner points of the cylinder cross-section
-        let bottom_center = DVec2::new(-self.radius, -half_height); // axis at bottom
-        let bottom_surface = DVec2::new(0.0, -half_height); // surface at bottom
-        let top_surface = DVec2::new(0.0, half_height); // surface at top
-        let top_center = DVec2::new(-self.radius, half_height); // axis at top
+        let bottom_x = -(max_radius - self.bottom_radius); // surface at bottom (offset from path)
+        let top_x = -(max_radius - self.top_radius); // surface at top (offset from path)
+
+        // The 4 corner points of the frustum cross-section
+        let bottom_center = DVec2::new(-max_radius, -half_height); // axis at bottom
+        let bottom_surface = DVec2::new(bottom_x, -half_height); // surface at bottom
+        let top_surface = DVec2::new(top_x, half_height); // surface at top
+        let top_center = DVec2::new(-max_radius, half_height); // axis at top
 
         // Simple 4-command profile:
         // Move to bottom center, then 3 lines forming the cross-section
@@ -644,7 +821,7 @@ impl Cylinder {
                 },
                 self.bottom_edge,
             ),
-            // Body: vertical line up the surface, with top_edge corner treatment
+            // Body: diagonal line up the surface, with top_edge corner treatment
             ProfileCommand::new(PathCommand::Line { point: top_surface }, self.top_edge),
             // Top cap: line from surface back to axis
             ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
@@ -652,29 +829,42 @@ impl Cylinder {
     }
 }
 
-impl GeometryModel for Cylinder {
-    /// Converts the cylinder to a polygon mesh.
+impl GeometryModel for ConicalFrustum {
+    /// Converts the conical frustum to a polygon mesh.
     ///
-    /// This method creates a `SweepModel` from the cylinder parameters and
+    /// This method creates a `SweepModel` from the frustum parameters and
     /// delegates to the sweep model's `to_polygon_mesh` implementation.
     /// After mesh generation, the geometry IDs are remapped to support
     /// 5 material regions: bottom cap (0), bottom edge (1), body (2), top edge (3), top cap (4).
     ///
     /// # Returns
-    /// A `Result` containing the `PolygonMesh` representation of the cylinder,
+    /// A `Result` containing the `PolygonMesh` representation of the frustum,
     /// or a `GeometryError` if the conversion fails.
     ///
     /// # Errors
     /// Returns an error if:
-    /// - The radius is invalid (zero or negative)
+    /// - Either radius is invalid (negative)
+    /// - Both radii are zero
     /// - The height is invalid (zero or negative)
     /// - The segment count is less than 3
     fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
         // Validate parameters
-        if self.radius <= 0.0 {
+        if self.bottom_radius < 0.0 {
             return Err(GeometryError::InvalidParameter {
-                parameter: "radius".to_string(),
-                message: "Radius must be positive".to_string(),
+                parameter: "bottom_radius".to_string(),
+                message: "Bottom radius must be non-negative".to_string(),
+            });
+        }
+        if self.top_radius < 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "top_radius".to_string(),
+                message: "Top radius must be non-negative".to_string(),
+            });
+        }
+        if self.bottom_radius == 0.0 && self.top_radius == 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "radii".to_string(),
+                message: "At least one radius must be positive".to_string(),
             });
         }
         if self.height <= 0.0 {
@@ -691,53 +881,20 @@ impl GeometryModel for Cylinder {
         }
 
         // Validate edge sizes don't exceed half the height
-        let bottom_edge_size = Self::get_edge_radius(&self.bottom_edge);
-        let top_edge_size = Self::get_edge_radius(&self.top_edge);
+        let bottom_edge_size = get_edge_radius(&self.bottom_edge);
+        let top_edge_size = get_edge_radius(&self.top_edge);
         if bottom_edge_size + top_edge_size > self.height {
             return Err(GeometryError::InvalidParameter {
                 parameter: "edges".to_string(),
-                message: "Combined edge sizes cannot exceed cylinder height".to_string(),
+                message: "Combined edge sizes cannot exceed frustum height".to_string(),
             });
         }
 
         let sweep_model = self.to_sweep_model();
         let mut mesh = sweep_model.to_polygon_mesh()?;
 
-        // Map segment IDs to our 5 material regions:
-        // 0 = bottom cap, 1 = bottom edge, 2 = body, 3 = top edge, 4 = top cap
-        //
-        // With the simple 4-command profile (Move, Line, Line, Line), the PlanarProfile
-        // generates segment IDs as follows:
-        // - Path segments get even IDs: 0, 2, 4 (for our 3 Line commands)
-        // - Corner segments (fillets/chamfers) get odd IDs: 1, 3 (between the lines)
-        //
-        // So the mapping is:
-        // segment_id 0 -> geometry 0 (bottom cap)
-        // segment_id 1 -> geometry 1 (bottom edge fillet/chamfer, if present)
-        // segment_id 2 -> geometry 2 (body)
-        // segment_id 3 -> geometry 3 (top edge fillet/chamfer, if present)
-        // segment_id 4 -> geometry 4 (top cap)
-
-        for polygon in &mut mesh.polygons {
-            let segment_id = polygon.geometry_id;
-
-            // Direct mapping - segment IDs already match our 5 regions
-            polygon.geometry_id = match segment_id {
-                0 => 0, // bottom cap
-                1 => 1, // bottom edge
-                2 => 2, // body
-                3 => 3, // top edge
-                4 => 4, // top cap
-                _ => segment_id % 5,
-            };
-        }
-
-        // Update material map for the 5 regions
-        mesh.material_map.clear();
-        for face_index in 0..5 {
-            let material_name = self.material.get_material_for_face(face_index, 5);
-            mesh.set_material(face_index, material_name);
-        }
+        // Apply the standard 5-region material mapping
+        apply_frustum_material_mapping(&mut mesh, &self.material);
 
         Ok(mesh)
     }
@@ -1837,9 +1994,32 @@ mod tests {
     #[test]
     fn test_cylinder_to_sweep_model() {
         let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
-        let sweep_model = cylinder.to_sweep_model();
+        // Cylinder delegates to ConicalFrustum internally
+        let sweep_model = cylinder.to_conical_frustum().to_sweep_model();
 
         assert_eq!(sweep_model.material, Material::Default);
+    }
+
+    #[test]
+    fn test_cylinder_to_conical_frustum_conversion() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Fillet { radius: 0.05 },
+            Material::Uniform("test".to_string()),
+        );
+        let frustum = cylinder.to_conical_frustum();
+
+        // Verify conversion produces correct values
+        assert_eq!(frustum.bottom_radius, 0.5);
+        assert_eq!(frustum.top_radius, 0.5); // Same as bottom for cylinder
+        assert_eq!(frustum.height, 2.0);
+        assert_eq!(frustum.segments, 24);
+        assert_eq!(frustum.bottom_edge, Corner::Chamfer { distance: 0.1 });
+        assert_eq!(frustum.top_edge, Corner::Fillet { radius: 0.05 });
+        assert_eq!(frustum.material, Material::Uniform("test".to_string()));
     }
 
     #[test]
@@ -1852,7 +2032,8 @@ mod tests {
             Corner::Edge,
             Material::Uniform("test_material".to_string()),
         );
-        let sweep_model = cylinder.to_sweep_model();
+        // Cylinder delegates to ConicalFrustum internally
+        let sweep_model = cylinder.to_conical_frustum().to_sweep_model();
 
         assert_eq!(
             sweep_model.material,
@@ -1867,7 +2048,8 @@ mod tests {
     #[test]
     fn test_cylinder_profile_no_edges() {
         let cylinder = Cylinder::new(0.5, 2.0, 24, Corner::Edge, Corner::Edge, Material::Default);
-        let profile = cylinder.create_cylinder_profile(1.0);
+        let frustum = cylinder.to_conical_frustum();
+        let profile = frustum.create_frustum_profile(1.0, 0.5); // half_height = 1.0, max_radius = 0.5
 
         // Profile should have exactly 4 commands: Move, Line, Line, Line
         assert_eq!(profile.len(), 4);
@@ -1883,7 +2065,8 @@ mod tests {
             Corner::Chamfer { distance: 0.1 },
             Material::Default,
         );
-        let profile = cylinder.create_cylinder_profile(1.0);
+        let frustum = cylinder.to_conical_frustum();
+        let profile = frustum.create_frustum_profile(1.0, 0.5);
 
         // Profile should still have exactly 4 commands - corners are encoded in the Line commands
         assert_eq!(profile.len(), 4);
@@ -1895,16 +2078,11 @@ mod tests {
 
     #[test]
     fn test_cylinder_get_edge_radius() {
-        assert_eq!(Cylinder::get_edge_radius(&Corner::Edge), 0.0);
-        assert_eq!(Cylinder::get_edge_radius(&Corner::SmoothEdge), 0.0);
-        assert_eq!(
-            Cylinder::get_edge_radius(&Corner::Chamfer { distance: 0.5 }),
-            0.5
-        );
-        assert_eq!(
-            Cylinder::get_edge_radius(&Corner::Fillet { radius: 0.3 }),
-            0.3
-        );
+        // Tests the module-level get_edge_radius function (shared by Cylinder and ConicalFrustum)
+        assert_eq!(get_edge_radius(&Corner::Edge), 0.0);
+        assert_eq!(get_edge_radius(&Corner::SmoothEdge), 0.0);
+        assert_eq!(get_edge_radius(&Corner::Chamfer { distance: 0.5 }), 0.5);
+        assert_eq!(get_edge_radius(&Corner::Fillet { radius: 0.3 }), 0.3);
     }
 
     /// Test with exact parameters from vitest that was hanging
@@ -2006,8 +2184,9 @@ mod tests {
             Material::Default,
         );
 
-        // Create the profile directly using the internal method
-        let profile = cylinder.create_cylinder_profile(1.0); // half_height = 1.0
+        // Create the profile using the ConicalFrustum conversion
+        let frustum = cylinder.to_conical_frustum();
+        let profile = frustum.create_frustum_profile(1.0, 0.5); // half_height = 1.0, max_radius = 0.5
 
         // Convert to curve set
         let curve_set = profile.to_curve_set();
@@ -2023,7 +2202,7 @@ mod tests {
         // Verify all segment lengths are reasonable
         for curve in curve_set.curves.iter() {
             for seg in curve.segments.iter() {
-                let len = seg.length();
+                let len: f64 = seg.length();
                 assert!(
                     len < 10.0,
                     "Segment {} has unreasonable length: {}",
@@ -2048,6 +2227,451 @@ mod tests {
 
         // This should complete without hanging
         let mesh = cylinder.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(
+            mesh.geometries.len(),
+            1,
+            "Expected 1 material region with Uniform"
+        );
+    }
+
+    // ============================================================================
+    // ConicalFrustum tests
+    // ============================================================================
+
+    #[test]
+    fn test_conical_frustum_new() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        assert_eq!(frustum.bottom_radius, 0.5);
+        assert_eq!(frustum.top_radius, 0.25);
+        assert_eq!(frustum.height, 2.0);
+        assert_eq!(frustum.segments, 24);
+        assert_eq!(frustum.bottom_edge, Corner::Edge);
+        assert_eq!(frustum.top_edge, Corner::Edge);
+        assert_eq!(frustum.material, Material::Default);
+    }
+
+    #[test]
+    fn test_conical_frustum_to_polygon_mesh_basic() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.polygons.is_empty());
+    }
+
+    #[test]
+    fn test_conical_frustum_with_chamfered_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        // Should have 5 geometry regions
+        let geometry_ids: std::collections::HashSet<_> =
+            mesh.polygons.iter().map(|p| p.geometry_id).collect();
+        assert_eq!(
+            geometry_ids.len(),
+            5,
+            "Expected 5 geometry regions, got {:?}",
+            geometry_ids
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_with_filleted_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        // Should have 5 geometry regions
+        let geometry_ids: std::collections::HashSet<_> =
+            mesh.polygons.iter().map(|p| p.geometry_id).collect();
+        assert_eq!(
+            geometry_ids.len(),
+            5,
+            "Expected 5 geometry regions, got {:?}",
+            geometry_ids
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_negative_bottom_radius() {
+        let frustum = ConicalFrustum::new(
+            -0.5, // invalid
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_negative_top_radius() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            -0.25, // invalid
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_zero_radii() {
+        let frustum = ConicalFrustum::new(
+            0.0,
+            0.0, // both zero is invalid
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_zero_height() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            0.0, // invalid
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_segments() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            2, // invalid - must be at least 3
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_invalid_edge_sizes() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            0.5,
+            24,
+            Corner::Chamfer { distance: 0.3 }, // too large
+            Corner::Chamfer { distance: 0.3 }, // too large
+            Material::Default,
+        );
+        let mesh = frustum.to_polygon_mesh();
+        assert!(mesh.is_err());
+    }
+
+    #[test]
+    fn test_conical_frustum_triangular_mesh() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+
+        let mesh = frustum.to_triangular_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        // Sharp edges: 3 geometry regions (bottom_cap, body, top_cap)
+        assert_eq!(mesh.geometries.len(), 3);
+    }
+
+    #[test]
+    fn test_conical_frustum_triangular_mesh_with_5_materials() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Array(vec![
+                "bottom_cap".to_string(),
+                "bottom_edge".to_string(),
+                "body".to_string(),
+                "top_edge".to_string(),
+                "top_cap".to_string(),
+            ]),
+        );
+
+        let mesh = frustum.to_triangular_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        assert_eq!(mesh.geometries.len(), 5);
+    }
+
+    #[test]
+    fn test_conical_frustum_cone_shape() {
+        // Test a cone (top_radius = 0)
+        let cone = ConicalFrustum::new(
+            0.5,
+            0.0, // cone tip
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+
+        let mesh = cone.to_polygon_mesh();
+        assert!(mesh.is_ok(), "Cone mesh creation failed: {:?}", mesh.err());
+    }
+
+    #[test]
+    fn test_conical_frustum_inverted_cone_shape() {
+        // Test an inverted cone (bottom_radius = 0)
+        let cone = ConicalFrustum::new(
+            0.0, // point at bottom
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+
+        let mesh = cone.to_polygon_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Inverted cone mesh creation failed: {:?}",
+            mesh.err()
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_equal_radii_is_cylinder() {
+        // When both radii are equal, it should behave like a cylinder
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.5, // same as bottom
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+
+        let mesh = frustum.to_polygon_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Equal radii mesh creation failed: {:?}",
+            mesh.err()
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_sweep_model_material() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("test_material".to_string()),
+        );
+        let sweep_model = frustum.to_sweep_model();
+
+        assert_eq!(
+            sweep_model.material,
+            Material::Uniform("test_material".to_string())
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_profile_no_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let profile = frustum.create_frustum_profile(1.0, 0.5);
+
+        // Profile should have exactly 4 commands: Move, Line, Line, Line
+        assert_eq!(profile.len(), 4);
+    }
+
+    #[test]
+    fn test_conical_frustum_profile_with_chamfers() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let profile = frustum.create_frustum_profile(1.0, 0.5);
+
+        // Profile should still have exactly 4 commands - corners are encoded in the Line commands
+        assert_eq!(profile.len(), 4);
+
+        // Verify the corner types
+        assert!(matches!(profile.commands[1].corner, Corner::Chamfer { .. }));
+        assert!(matches!(profile.commands[2].corner, Corner::Chamfer { .. }));
+    }
+
+    #[test]
+    fn test_conical_frustum_get_edge_radius() {
+        assert_eq!(get_edge_radius(&Corner::Edge), 0.0);
+        assert_eq!(get_edge_radius(&Corner::SmoothEdge), 0.0);
+        assert_eq!(get_edge_radius(&Corner::Chamfer { distance: 0.5 }), 0.5);
+        assert_eq!(get_edge_radius(&Corner::Fillet { radius: 0.3 }), 0.3);
+    }
+
+    #[test]
+    fn test_conical_frustum_fillet_parameters() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+
+        let mesh = frustum.to_polygon_mesh();
+        assert!(
+            mesh.is_ok(),
+            "ConicalFrustum mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.polygons.is_empty());
+
+        // Should have 5 geometry regions
+        let geometry_ids: std::collections::HashSet<_> =
+            mesh.polygons.iter().map(|p| p.geometry_id).collect();
+        assert_eq!(
+            geometry_ids.len(),
+            5,
+            "Expected 5 geometry regions, got {:?}",
+            geometry_ids
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_small_fillet_radius() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.05 },
+            Corner::Fillet { radius: 0.05 },
+            Material::Uniform("default".to_string()),
+        );
+
+        let mesh = frustum.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(
+            mesh.geometries.len(),
+            1,
+            "Expected 1 material region with Uniform"
+        );
+    }
+
+    #[test]
+    fn test_conical_frustum_large_fillet_radius() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.2 },
+            Corner::Fillet { radius: 0.2 },
+            Material::Uniform("default".to_string()),
+        );
+
+        let mesh = frustum.to_triangular_mesh();
         assert!(
             mesh.is_ok(),
             "Triangular mesh creation failed: {:?}",
