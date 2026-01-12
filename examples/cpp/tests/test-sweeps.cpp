@@ -9,8 +9,9 @@ using test_utils::vertex_count;
 // Torus C API Tests
 // =============================================================================
 
-TEST_SUITE("Torus C API") {
-
+TEST_SUITE(
+    "Torus C API"
+) {
     TEST_CASE("create_torus_c returns error for null JSON") {
         MeshGuard mesh{create_torus_c(nullptr)};
 
@@ -27,7 +28,8 @@ TEST_SUITE("Torus C API") {
     }
 
     TEST_CASE("Torus with uniform material") {
-        constexpr auto json = R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":36,"minor_segments":18,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":36,"minor_segments":18,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_torus_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -40,7 +42,8 @@ TEST_SUITE("Torus C API") {
     }
 
     TEST_CASE("Torus with smaller segments") {
-        constexpr auto json = R"({"major_radius":1.0,"minor_radius":0.25,"major_segments":16,"minor_segments":8,"material":{"Uniform":"ring"}})";
+        constexpr auto json =
+            R"({"major_radius":1.0,"minor_radius":0.25,"major_segments":16,"minor_segments":8,"material":{"Uniform":"ring"}})";
         MeshGuard mesh{create_torus_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -51,7 +54,8 @@ TEST_SUITE("Torus C API") {
     }
 
     TEST_CASE("Torus geometry data arrays are consistent") {
-        constexpr auto json = R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":24,"minor_segments":12,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":24,"minor_segments":12,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_torus_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -66,7 +70,8 @@ TEST_SUITE("Torus C API") {
     }
 
     TEST_CASE("Torus indices are within vertex bounds") {
-        constexpr auto json = R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":16,"minor_segments":8,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"major_radius":2.0,"minor_radius":0.5,"major_segments":16,"minor_segments":8,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_torus_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -84,8 +89,9 @@ TEST_SUITE("Torus C API") {
 // Capsule C API Tests
 // =============================================================================
 
-TEST_SUITE("Capsule C API") {
-
+TEST_SUITE(
+    "Capsule C API"
+) {
     TEST_CASE("create_capsule_c returns error for null JSON") {
         MeshGuard mesh{create_capsule_c(nullptr)};
 
@@ -102,7 +108,8 @@ TEST_SUITE("Capsule C API") {
     }
 
     TEST_CASE("Capsule with uniform material") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_capsule_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -115,7 +122,8 @@ TEST_SUITE("Capsule C API") {
     }
 
     TEST_CASE("Capsule with array material creates 3 geometries") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"material":{"Array":["bottom","body","top"]}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"material":{"Array":["bottom","body","top"]}})";
         MeshGuard mesh{create_capsule_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -131,7 +139,8 @@ TEST_SUITE("Capsule C API") {
     }
 
     TEST_CASE("Capsule geometry data arrays are consistent") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_capsule_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -146,7 +155,8 @@ TEST_SUITE("Capsule C API") {
     }
 
     TEST_CASE("Capsule indices are within vertex bounds") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_capsule_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -164,8 +174,9 @@ TEST_SUITE("Capsule C API") {
 // Cylinder C API Tests
 // =============================================================================
 
-TEST_SUITE("Cylinder C API") {
-
+TEST_SUITE(
+    "Cylinder C API"
+) {
     TEST_CASE("create_cylinder_c returns error for null JSON") {
         MeshGuard mesh{create_cylinder_c(nullptr)};
 
@@ -182,7 +193,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder with sharp edges and uniform material") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -195,7 +207,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder with chamfered edges") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -204,7 +217,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder with filleted edges") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Fillet":{"radius":0.1}},"top_edge":{"Fillet":{"radius":0.1}},"material":{"Uniform":"metal"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Fillet":{"radius":0.1}},"top_edge":{"Fillet":{"radius":0.1}},"material":{"Uniform":"metal"}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -213,7 +227,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder with array material creates 5 geometries") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -221,7 +236,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder with default material") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":"Default"})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":"Default"})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -230,7 +246,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder geometry data arrays are consistent") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -245,7 +262,8 @@ TEST_SUITE("Cylinder C API") {
     }
 
     TEST_CASE("Cylinder indices are within vertex bounds") {
-        constexpr auto json = R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_cylinder_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -263,8 +281,9 @@ TEST_SUITE("Cylinder C API") {
 // Conical Frustum C API Tests
 // =============================================================================
 
-TEST_SUITE("Conical Frustum C API") {
-
+TEST_SUITE(
+    "Conical Frustum C API"
+) {
     TEST_CASE("create_conical_frustum_c returns error for null JSON") {
         MeshGuard mesh{create_conical_frustum_c(nullptr)};
 
@@ -281,7 +300,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum with sharp edges and uniform material") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -294,7 +314,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum with chamfered edges") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -303,7 +324,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Cone (top_radius = 0)") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.0,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.0,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -312,7 +334,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum with array material creates 5 geometries") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -320,7 +343,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum with default material") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":"Default"})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":"Default"})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -329,7 +353,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum geometry data arrays are consistent") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -344,7 +369,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Conical frustum indices are within vertex bounds") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -358,7 +384,8 @@ TEST_SUITE("Conical Frustum C API") {
     }
 
     TEST_CASE("Map material creates expected geometries") {
-        constexpr auto json = R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Map":{"default":"base","face_map":{"0":"special","4":"special"}}}})";
+        constexpr auto json =
+            R"({"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Map":{"default":"base","face_map":{"0":"special","4":"special"}}}})";
         MeshGuard mesh{create_conical_frustum_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());

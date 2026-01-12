@@ -6,8 +6,9 @@ using test_utils::StringGuard;
 using test_utils::triangle_count;
 using test_utils::vertex_count;
 
-TEST_SUITE("Sphere C API") {
-
+TEST_SUITE(
+    "Sphere C API"
+) {
     TEST_CASE("create_sphere_c returns error for null JSON") {
         MeshGuard mesh{create_sphere_c(nullptr)};
 
@@ -24,7 +25,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Slices sphere with uniform material") {
-        constexpr auto json = R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -37,7 +39,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Slices sphere with default material creates 1 geometry") {
-        constexpr auto json = R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":"Default"})";
+        constexpr auto json =
+            R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":"Default"})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -45,7 +48,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Cube sphere with uniform material") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -57,7 +61,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Cube sphere with array material creates 6 geometries") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["mat0","mat1","mat2","mat3","mat4","mat5"]}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["mat0","mat1","mat2","mat3","mat4","mat5"]}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -79,7 +84,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Cyclic material array groups faces correctly") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["mat0","mat1","mat2","mat0","mat1","mat2"]}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["mat0","mat1","mat2","mat0","mat1","mat2"]}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -87,7 +93,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Map material creates expected geometries") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Map":{"default":"base","face_map":{"0":"special","2":"special"}}}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Map":{"default":"base","face_map":{"0":"special","2":"special"}}}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -95,7 +102,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Geometry data arrays are consistent for slices sphere") {
-        constexpr auto json = R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -113,7 +121,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Geometry data arrays are consistent for cube sphere") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -124,7 +133,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Indices are within vertex bounds for slices sphere") {
-        constexpr auto json = R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Slices":{"slices":8,"segments":16}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -138,7 +148,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Indices are within vertex bounds for cube sphere") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -152,7 +163,8 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Total triangles across all geometries is correct for cube sphere") {
-        constexpr auto json = R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["m0","m1","m2","m3","m4","m5"]}})";
+        constexpr auto json =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Array":["m0","m1","m2","m3","m4","m5"]}})";
         MeshGuard mesh{create_sphere_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -166,8 +178,10 @@ TEST_SUITE("Sphere C API") {
     }
 
     TEST_CASE("Different segment counts produce different triangle counts") {
-        constexpr auto json_4 = R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
-        constexpr auto json_8 = R"({"geometry":{"Cube":{"segments":8}},"material":{"Uniform":"default"}})";
+        constexpr auto json_4 =
+            R"({"geometry":{"Cube":{"segments":4}},"material":{"Uniform":"default"}})";
+        constexpr auto json_8 =
+            R"({"geometry":{"Cube":{"segments":8}},"material":{"Uniform":"default"}})";
 
         MeshGuard mesh_4{create_sphere_c(json_4)};
         MeshGuard mesh_8{create_sphere_c(json_8)};
@@ -181,11 +195,11 @@ TEST_SUITE("Sphere C API") {
         // segments=8 should have 4× as many triangles as segments=4
         CHECK(triangles_8 == triangles_4 * 4);
     }
-
 }
 
-TEST_SUITE("Sphere Types API") {
-
+TEST_SUITE(
+    "Sphere Types API"
+) {
     TEST_CASE("get_sphere_types_c returns valid JSON array") {
         StringGuard types{get_sphere_types_c()};
 
@@ -205,5 +219,4 @@ TEST_SUITE("Sphere Types API") {
         CHECK(json.starts_with('['));
         CHECK(json.ends_with(']'));
     }
-
 }

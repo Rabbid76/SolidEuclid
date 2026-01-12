@@ -6,8 +6,9 @@ using test_utils::StringGuard;
 using test_utils::triangle_count;
 using test_utils::vertex_count;
 
-TEST_SUITE("Platonic Solid C API") {
-
+TEST_SUITE(
+    "Platonic Solid C API"
+) {
     TEST_CASE("create_platonic_solid_c returns error for null JSON") {
         MeshGuard mesh{create_platonic_solid_c(nullptr)};
 
@@ -25,7 +26,8 @@ TEST_SUITE("Platonic Solid C API") {
 
     TEST_CASE("create_platonic_solid_c returns error for unknown geometry") {
         MeshGuard mesh{create_platonic_solid_c(
-            R"({"geometry":"InvalidSolid","material":{"Uniform":"default"}})")};
+            R"({"geometry":"InvalidSolid","material":{"Uniform":"default"}})"
+        )};
 
         CHECK(mesh.has_error());
     }
@@ -39,8 +41,8 @@ TEST_SUITE("Platonic Solid C API") {
 
         const auto& entry = mesh.entry(0);
         CHECK(std::string_view{entry.material_id} == "default");
-        CHECK(vertex_count(entry.geometry) == 12);    // 4 faces × 3 vertices
-        CHECK(triangle_count(entry.geometry) == 4);   // 4 triangular faces
+        CHECK(vertex_count(entry.geometry) == 12);   // 4 faces × 3 vertices
+        CHECK(triangle_count(entry.geometry) == 4);  // 4 triangular faces
     }
 
     TEST_CASE("Hexahedron with uniform material") {
@@ -56,7 +58,8 @@ TEST_SUITE("Platonic Solid C API") {
     }
 
     TEST_CASE("Hexahedron with array material creates 6 geometries") {
-        constexpr auto json = R"({"geometry":"Hexahedron","material":{"Array":["mat0","mat1","mat2","mat3","mat4","mat5"]}})";
+        constexpr auto json =
+            R"({"geometry":"Hexahedron","material":{"Array":["mat0","mat1","mat2","mat3","mat4","mat5"]}})";
         MeshGuard mesh{create_platonic_solid_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -102,7 +105,8 @@ TEST_SUITE("Platonic Solid C API") {
     }
 
     TEST_CASE("Map material creates expected geometries") {
-        constexpr auto json = R"({"geometry":"Tetrahedron","material":{"Map":{"default":"base","face_map":{"0":"special","2":"special"}}}})";
+        constexpr auto json =
+            R"({"geometry":"Tetrahedron","material":{"Map":{"default":"base","face_map":{"0":"special","2":"special"}}}})";
         MeshGuard mesh{create_platonic_solid_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -143,7 +147,8 @@ TEST_SUITE("Platonic Solid C API") {
 
     TEST_CASE("Cyclic material array groups faces correctly") {
         // Using 3 materials cyclically for 6 faces should result in 3 geometries
-        constexpr auto json = R"({"geometry":"Hexahedron","material":{"Array":["mat0","mat1","mat2","mat0","mat1","mat2"]}})";
+        constexpr auto json =
+            R"({"geometry":"Hexahedron","material":{"Array":["mat0","mat1","mat2","mat0","mat1","mat2"]}})";
         MeshGuard mesh{create_platonic_solid_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -151,7 +156,8 @@ TEST_SUITE("Platonic Solid C API") {
     }
 
     TEST_CASE("Total triangles across all geometries is correct for hexahedron") {
-        constexpr auto json = R"({"geometry":"Hexahedron","material":{"Array":["m0","m1","m2","m3","m4","m5"]}})";
+        constexpr auto json =
+            R"({"geometry":"Hexahedron","material":{"Array":["m0","m1","m2","m3","m4","m5"]}})";
         MeshGuard mesh{create_platonic_solid_c(json)};
 
         REQUIRE_FALSE(mesh.has_error());
@@ -162,11 +168,11 @@ TEST_SUITE("Platonic Solid C API") {
         }
         CHECK(total_triangles == 12);  // Hexahedron has 12 triangles total
     }
-
 }
 
-TEST_SUITE("Platonic Solid Types API") {
-
+TEST_SUITE(
+    "Platonic Solid Types API"
+) {
     TEST_CASE("get_platonic_solid_types_c returns valid JSON array") {
         StringGuard types{get_platonic_solid_types_c()};
 
@@ -189,5 +195,4 @@ TEST_SUITE("Platonic Solid Types API") {
         CHECK(json.starts_with('['));
         CHECK(json.ends_with(']'));
     }
-
 }

@@ -11,13 +11,13 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "format:cpp": "find examples/cpp -name '*.cpp' -o -name '*.h' | xargs ./clang-format -i",
+    "format:cpp": "find examples/cpp \\( -name '*.cpp' -o -name '*.h' \\) ! -name 'doctest.h' | xargs clang-format --Wno-error=unknown -i",
     "test": "npm run build:wasm && vitest run",
     "test:watch": "npm run build:wasm && vitest",
     "test:cpp": "cmake --build build --target solid_euclid_tests && ./build/examples/cpp/solid_euclid_tests",
     "test:all": "cargo test && npm run test && npm run test:cpp",
     "ncu": "ncu -u && npm update && npm i && cd debug-apps && ncu -u && npm update && npm i",
-    "tidy-up": "npm run format && npm run lint:fix && cargo fix --allow-dirty --allow-staged && cargo fmt"
+    "tidy-up": "npm run format && npm run lint:fix && cargo fix --allow-dirty --allow-staged && cargo fmt && npm run format:cpp"
   },
   "dependencies": {
     "three": "^0.182.0"
