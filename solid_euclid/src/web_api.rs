@@ -4,6 +4,7 @@ use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
 use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
+use crate::triangular_mesh::TriangularMesh;
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -104,6 +105,36 @@ impl WasmTriangularMesh {
     }
 }
 
+/// Converts a `TriangularMesh` into a `WasmTriangularMesh`.
+///
+/// This helper function handles the common conversion pattern used across
+/// all geometry creation functions, reducing code duplication.
+fn triangular_mesh_to_wasm(triangular_mesh: TriangularMesh) -> WasmTriangularMesh {
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    WasmTriangularMesh {
+        material_ids,
+        geometries,
+    }
+}
+
 /// Creates a triangular mesh for a Platonic solid model from a JavaScript object.
 ///
 /// # Arguments
@@ -136,29 +167,7 @@ pub fn create_platonic_solid(model: JsValue) -> Result<WasmTriangularMesh, JsErr
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Returns a list of available Platonic solid types.
@@ -204,29 +213,7 @@ pub fn create_sphere(model: JsValue) -> Result<WasmTriangularMesh, JsError> {
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create sphere mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Returns a list of available Sphere types.
@@ -270,29 +257,7 @@ pub fn create_torus(torus: JsValue) -> Result<WasmTriangularMesh, JsError> {
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create torus mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Creates a triangular mesh for a Capsule from a JavaScript object.
@@ -339,29 +304,7 @@ pub fn create_capsule(capsule: JsValue) -> Result<WasmTriangularMesh, JsError> {
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create capsule mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Creates a triangular mesh for a Cylinder from a JavaScript object.
@@ -426,29 +369,7 @@ pub fn create_cylinder(cylinder: JsValue) -> Result<WasmTriangularMesh, JsError>
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create cylinder mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Creates a triangular mesh for a ConicalFrustum from a JavaScript object.
@@ -517,29 +438,7 @@ pub fn create_conical_frustum(frustum: JsValue) -> Result<WasmTriangularMesh, Js
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create conical frustum mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 #[cfg(test)]
@@ -558,29 +457,7 @@ mod tests {
     // Helper to create a Model directly for testing (since we can't create JsValue in tests)
     fn create_mesh_from_model(model: Model) -> WasmTriangularMesh {
         let triangular_mesh = model.to_triangular_mesh().unwrap();
-
-        let mut material_ids = Vec::new();
-        let mut geometries = Vec::new();
-
-        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-        sorted_materials.sort();
-
-        for material_id in sorted_materials {
-            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-                material_ids.push(material_id.clone());
-                geometries.push(WasmTriangularGeometry {
-                    vertices: geometry.vertices.clone(),
-                    normals: geometry.normals.clone(),
-                    uvs: geometry.uvs.clone(),
-                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-                });
-            }
-        }
-
-        WasmTriangularMesh {
-            material_ids,
-            geometries,
-        }
+        triangular_mesh_to_wasm(triangular_mesh)
     }
 
     #[test]
@@ -821,29 +698,7 @@ mod tests {
     // Helper to create a WasmTriangularMesh from a SphereModel directly for testing
     fn create_mesh_from_sphere_model(model: SphereModel) -> WasmTriangularMesh {
         let triangular_mesh = model.to_triangular_mesh().unwrap();
-
-        let mut material_ids = Vec::new();
-        let mut geometries = Vec::new();
-
-        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-        sorted_materials.sort();
-
-        for material_id in sorted_materials {
-            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-                material_ids.push(material_id.clone());
-                geometries.push(WasmTriangularGeometry {
-                    vertices: geometry.vertices.clone(),
-                    normals: geometry.normals.clone(),
-                    uvs: geometry.uvs.clone(),
-                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-                });
-            }
-        }
-
-        WasmTriangularMesh {
-            material_ids,
-            geometries,
-        }
+        triangular_mesh_to_wasm(triangular_mesh)
     }
 
     #[test]

@@ -38,13 +38,10 @@ fn get_edge_radius(corner: &Corner) -> f64 {
 fn apply_frustum_material_mapping(mesh: &mut PolygonMesh, material: &Material) {
     for polygon in &mut mesh.polygons {
         let segment_id = polygon.geometry_id;
-        polygon.geometry_id = match segment_id {
-            0 => 0, // bottom cap
-            1 => 1, // bottom edge
-            2 => 2, // body
-            3 => 3, // top edge
-            4 => 4, // top cap
-            _ => segment_id % 5,
+        polygon.geometry_id = if segment_id >= 5 {
+            segment_id % 5
+        } else {
+            segment_id
         };
     }
 

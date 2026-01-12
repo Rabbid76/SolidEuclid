@@ -57,10 +57,16 @@ pub enum PathCommand {
         center: DVec2,
     },
     /// Draw a Bezier curve to a point.
+    ///
+    /// Note: This represents a Bezier curve in the public API, but it will be
+    /// converted to an internal NURBS representation for evaluation and
+    /// downstream geometric operations.
     Bezier {
-        /// The end point of the Bezier curve.
+        /// The end point of the Bezier curve in parameter space; this will be
+        /// used to construct the corresponding internal NURBS segment.
         point: DVec2,
-        /// The control points defining the curve shape.
+        /// The Bezier control points defining the curve shape, which will be
+        /// converted into control data for the internal NURBS representation.
         control_points: Vec<DVec2>,
     },
 }
