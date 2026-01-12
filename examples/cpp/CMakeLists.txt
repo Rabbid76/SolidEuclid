@@ -32,6 +32,7 @@ add_executable(solid_euclid_tests
     tests/test-main.cpp
     tests/test-platonic-solid.cpp
     tests/test-sphere.cpp
+    tests/test-sweeps.cpp
 )
 
 target_link_libraries(solid_euclid_tests PRIVATE solid_euclid)
