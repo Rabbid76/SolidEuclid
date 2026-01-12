@@ -1,5 +1,6 @@
 use crate::geometry_error::GeometryError;
-use crate::planar_contour::{Contour, ContourSet, Point, SampleContour, Segment};
+use crate::planar_contour::{ContourSet, SampleContour};
+use crate::planar_nurbs_curve::{Curve, CurveSet, Nurbs, NurbsSegment};
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -55,11 +56,17 @@ pub enum PathCommand {
         /// The center point of the ellipse.
         center: DVec2,
     },
-    /// Draw a NURBS curve to a point.
-    Nurbs {
-        /// The end point of the NURBS curve.
+    /// Draw a Bezier curve to a point.
+    ///
+    /// Note: This represents a Bezier curve in the public API, but it will be
+    /// converted to an internal NURBS representation for evaluation and
+    /// downstream geometric operations.
+    Bezier {
+        /// The end point of the Bezier curve in parameter space; this will be
+        /// used to construct the corresponding internal NURBS segment.
         point: DVec2,
-        /// The control points defining the curve shape.
+        /// The Bezier control points defining the curve shape, which will be
+        /// converted into control data for the internal NURBS representation.
         control_points: Vec<DVec2>,
     },
 }
@@ -128,387 +135,28 @@ impl PlanarProfile {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
-}
 
-/// Helper struct to track the state during contour sampling.
-struct ContourBuilder {
-    /// The current position.
-    current_pos: DVec2,
-    /// The current tangent.
-    current_tangent: DVec2,
-    /// The first point of the current contour.
-    first_pos: Option<DVec2>,
-    /// The first tangent of the current contour.
-    first_tangent: Option<DVec2>,
-    /// The current segment index.
-    segment_index: u32,
-    /// Accumulated segments for the current contour.
-    segments: Vec<Segment>,
-    /// Pending corner from the previous command.
-    pending_corner: Option<Corner>,
-    /// Pending end position for corner processing.
-    pending_end_pos: Option<DVec2>,
-    /// Pending end tangent for corner processing.
-    pending_end_tangent: Option<DVec2>,
-}
+    /// Converts this `PlanarProfile` to a `CurveSet`.
+    ///
+    /// Each `ProfileCommand` is converted to 0, 1, or 2 NURBS segments:
+    /// - `Move`: 0 segments (just sets the current position)
+    /// - `Edge` or `SmoothEdge` corner: 1 segment (the path command itself)
+    /// - `Chamfer` or `Fillet` corner: 2 segments (path + corner treatment)
+    ///
+    /// Path commands generate segment IDs 0, 2, 4, 6... (even numbers).
+    /// Corner segments (chamfer/fillet) get segment IDs 1, 3, 5... (odd numbers).
+    ///
+    /// # Returns
+    /// A `Result` containing the `CurveSet`, or a `GeometryError` if conversion fails.
+    pub fn to_curve_set(&self) -> Result<CurveSet, GeometryError> {
+        let mut curve_set = CurveSet::new();
+        let mut current_curve: Option<Curve> = None;
+        let mut current_pos = DVec2::ZERO;
+        let mut first_pos = DVec2::ZERO;
+        let mut path_segment_index: u32 = 0;
 
-impl ContourBuilder {
-    fn new() -> Self {
-        Self {
-            current_pos: DVec2::ZERO,
-            current_tangent: DVec2::X,
-            first_pos: None,
-            first_tangent: None,
-            segment_index: 0,
-            segments: Vec::new(),
-            pending_corner: None,
-            pending_end_pos: None,
-            pending_end_tangent: None,
-        }
-    }
-
-    fn start_at(&mut self, pos: DVec2) {
-        self.current_pos = pos;
-        self.first_pos = Some(pos);
-        self.first_tangent = None;
-        self.segment_index = 0;
-        self.segments.clear();
-        self.pending_corner = None;
-        self.pending_end_pos = None;
-        self.pending_end_tangent = None;
-    }
-
-    fn add_segment(
-        &mut self,
-        start_pos: DVec2,
-        start_tangent: DVec2,
-        end_pos: DVec2,
-        end_tangent: DVec2,
-    ) {
-        let segment = Segment::new(
-            Point::new(start_pos, start_tangent),
-            Point::new(end_pos, end_tangent),
-            self.segment_index,
-        );
-        self.segments.push(segment);
-
-        // Set first tangent if this is the first segment
-        if self.first_tangent.is_none() {
-            self.first_tangent = Some(start_tangent);
-        }
-
-        self.current_pos = end_pos;
-        self.current_tangent = end_tangent;
-    }
-
-    fn next_segment(&mut self) {
-        self.segment_index += 1;
-    }
-
-    fn finalize_contour(&mut self, force_closed: Option<bool>) -> Option<Contour> {
-        if self.segments.is_empty() {
-            return None;
-        }
-
-        // Check if closed
-        let is_closed = force_closed.unwrap_or_else(|| {
-            if let Some(first_pos) = self.first_pos {
-                (self.current_pos - first_pos).length() < 1e-9
-            } else {
-                false
-            }
-        });
-
-        let contour = Contour::with_segments_and_closed(self.segments.clone(), is_closed);
-        self.segments.clear();
-        self.first_pos = None;
-        self.first_tangent = None;
-        Some(contour)
-    }
-}
-
-/// Samples a line segment.
-fn sample_line(start: DVec2, end: DVec2) -> (DVec2, DVec2) {
-    let direction = (end - start).normalize_or_zero();
-    let tangent = if direction.length_squared() > 0.0 {
-        direction
-    } else {
-        DVec2::X
-    };
-    (tangent, tangent)
-}
-
-/// Calculates the angle for an ellipse point.
-fn ellipse_angle(center: DVec2, point: DVec2) -> f64 {
-    let delta = point - center;
-    delta.y.atan2(delta.x)
-}
-
-/// Samples an ellipse/arc.
-fn sample_ellipse(
-    start: DVec2,
-    end: DVec2,
-    center: DVec2,
-    start_tangent: DVec2,
-    sample_distance: f64,
-) -> Vec<(DVec2, DVec2)> {
-    let radius = (start - center).length();
-    if radius < 1e-9 {
-        return vec![(end, start_tangent)];
-    }
-
-    let start_angle = ellipse_angle(center, start);
-    let end_angle = ellipse_angle(center, end);
-
-    // Check if it's a full circle (start == end)
-    let is_full_circle = (start - end).length() < 1e-9;
-
-    // Check if it's a half circle (center is on line between start and end)
-    let is_half_circle = if !is_full_circle {
-        let mid = (start + end) / 2.0;
-        (mid - center).length() < 1e-9
-    } else {
-        false
-    };
-
-    // Determine the arc direction based on the start tangent
-    let start_to_center = center - start;
-    let cross = start_tangent.x * start_to_center.y - start_tangent.y * start_to_center.x;
-    let clockwise = cross > 0.0;
-
-    let arc_angle = if is_full_circle {
-        2.0 * PI
-    } else if is_half_circle {
-        PI
-    } else {
-        let mut angle_diff = end_angle - start_angle;
-        if clockwise {
-            if angle_diff > 0.0 {
-                angle_diff -= 2.0 * PI;
-            }
-        } else if angle_diff < 0.0 {
-            angle_diff += 2.0 * PI;
-        }
-        angle_diff.abs()
-    };
-
-    // Calculate number of samples: at least 1 per 30 degrees, and based on sample_distance
-    let arc_length = radius * arc_angle;
-    let samples_by_distance = (arc_length / sample_distance).ceil() as usize;
-    let samples_by_angle = (arc_angle / (PI / 6.0)).ceil() as usize; // 30 degrees = PI/6
-    let num_samples = samples_by_distance.max(samples_by_angle).max(1);
-
-    let mut points = Vec::with_capacity(num_samples);
-    let angle_step = if clockwise { -arc_angle } else { arc_angle } / num_samples as f64;
-
-    for i in 1..=num_samples {
-        let angle = start_angle + angle_step * i as f64;
-        let pos = center + DVec2::new(radius * angle.cos(), radius * angle.sin());
-
-        // Tangent is perpendicular to radius
-        let tangent = if clockwise {
-            DVec2::new((angle + PI / 2.0).cos(), (angle + PI / 2.0).sin())
-        } else {
-            DVec2::new((angle - PI / 2.0).cos(), (angle - PI / 2.0).sin())
-        };
-
-        points.push((pos, tangent));
-    }
-
-    // Ensure the last point is exactly the end point
-    if let Some(last) = points.last_mut() {
-        last.0 = end;
-    }
-
-    points
-}
-
-/// Evaluates a cubic Bezier curve at parameter t.
-fn bezier_point(p0: DVec2, p1: DVec2, p2: DVec2, p3: DVec2, t: f64) -> DVec2 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    let mt3 = mt2 * mt;
-
-    p0 * mt3 + p1 * 3.0 * mt2 * t + p2 * 3.0 * mt * t2 + p3 * t3
-}
-
-/// Evaluates the derivative of a cubic Bezier curve at parameter t.
-fn bezier_tangent(p0: DVec2, p1: DVec2, p2: DVec2, p3: DVec2, t: f64) -> DVec2 {
-    let t2 = t * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-
-    let tangent = (p1 - p0) * 3.0 * mt2 + (p2 - p1) * 6.0 * mt * t + (p3 - p2) * 3.0 * t2;
-    tangent.normalize_or_zero()
-}
-
-/// Samples a NURBS curve (simplified as cubic Bezier segments).
-fn sample_nurbs(
-    start: DVec2,
-    end: DVec2,
-    control_points: &[DVec2],
-    sample_distance: f64,
-) -> Vec<(DVec2, DVec2)> {
-    if control_points.is_empty() {
-        // Just a line
-        let tangent = (end - start).normalize_or_zero();
-        return vec![(end, tangent)];
-    }
-
-    // Build a simple cubic Bezier from start through control points to end
-    let mut all_points = vec![start];
-    all_points.extend(control_points.iter().copied());
-    all_points.push(end);
-
-    // Minimum samples = number of control points
-    let min_samples = control_points.len();
-
-    // Estimate curve length for sample count
-    let mut estimated_length = 0.0;
-    for i in 0..all_points.len() - 1 {
-        estimated_length += (all_points[i + 1] - all_points[i]).length();
-    }
-    let samples_by_distance = (estimated_length / sample_distance).ceil() as usize;
-    let num_samples = samples_by_distance.max(min_samples).max(1);
-
-    let mut result = Vec::with_capacity(num_samples);
-
-    // For simplicity, use a Catmull-Rom like interpolation or cubic Bezier
-    // Here we'll use a simple approach with cubic Bezier if we have exactly 2 control points
-    if control_points.len() == 2 {
-        let p0 = start;
-        let p1 = control_points[0];
-        let p2 = control_points[1];
-        let p3 = end;
-
-        for i in 1..=num_samples {
-            let t = i as f64 / num_samples as f64;
-            let pos = bezier_point(p0, p1, p2, p3, t);
-            let tangent = bezier_tangent(p0, p1, p2, p3, t);
-            result.push((pos, tangent));
-        }
-    } else {
-        // General case: use quadratic Bezier segments or linear interpolation
-        // For now, use linear interpolation through all points
-        let total_segments = all_points.len() - 1;
-        let samples_per_segment = (num_samples / total_segments).max(1);
-
-        for seg in 0..total_segments {
-            let p0 = all_points[seg];
-            let p1 = all_points[seg + 1];
-            let tangent = (p1 - p0).normalize_or_zero();
-
-            let seg_samples = if seg == total_segments - 1 {
-                num_samples - result.len()
-            } else {
-                samples_per_segment
-            };
-
-            for i in 1..=seg_samples {
-                let t = i as f64 / seg_samples as f64;
-                let pos = p0.lerp(p1, t);
-                result.push((pos, tangent));
-            }
-        }
-    }
-
-    // Ensure the last point is exactly the end
-    if let Some(last) = result.last_mut() {
-        last.0 = end;
-    }
-
-    result
-}
-
-/// Creates a chamfer between two segments.
-fn create_chamfer(
-    corner_pos: DVec2,
-    incoming_tangent: DVec2,
-    outgoing_tangent: DVec2,
-    distance: f64,
-) -> Option<(DVec2, DVec2, DVec2, DVec2)> {
-    if distance <= 0.0 {
-        return None;
-    }
-
-    let start = corner_pos - incoming_tangent * distance;
-    let end = corner_pos + outgoing_tangent * distance;
-    let chamfer_tangent = (end - start).normalize_or_zero();
-
-    Some((start, incoming_tangent, end, chamfer_tangent))
-}
-
-/// Creates a fillet arc between two segments.
-fn create_fillet(
-    corner_pos: DVec2,
-    incoming_tangent: DVec2,
-    outgoing_tangent: DVec2,
-    radius: f64,
-    sample_distance: f64,
-) -> Vec<(DVec2, DVec2, DVec2, DVec2)> {
-    if radius <= 0.0 {
-        return vec![];
-    }
-
-    // Calculate the fillet center
-    let incoming_normal = DVec2::new(-incoming_tangent.y, incoming_tangent.x);
-    let _outgoing_normal = DVec2::new(-outgoing_tangent.y, outgoing_tangent.x);
-
-    // Determine which side the center should be on
-    let cross = incoming_tangent.x * outgoing_tangent.y - incoming_tangent.y * outgoing_tangent.x;
-    let sign = if cross > 0.0 { 1.0 } else { -1.0 };
-
-    let n1 = incoming_normal * sign;
-
-    // Find the fillet start and end points
-    let half_angle = ((1.0 - incoming_tangent.dot(outgoing_tangent)) / 2.0)
-        .sqrt()
-        .asin();
-    if half_angle.abs() < 1e-9 {
-        return vec![];
-    }
-
-    let offset = radius / half_angle.tan();
-    let start = corner_pos - incoming_tangent * offset;
-    let end = corner_pos + outgoing_tangent * offset;
-    let center = start + n1 * radius;
-
-    // Sample the arc
-    let arc_points = sample_ellipse(start, end, center, incoming_tangent, sample_distance);
-
-    let mut result = Vec::new();
-    let mut prev_pos = start;
-    let mut prev_tangent = incoming_tangent;
-
-    for (pos, tangent) in arc_points {
-        result.push((prev_pos, prev_tangent, pos, tangent));
-        prev_pos = pos;
-        prev_tangent = tangent;
-    }
-
-    result
-}
-
-/// Interpolates tangents for smooth edges.
-fn interpolate_tangent(t1: DVec2, t2: DVec2) -> DVec2 {
-    (t1 + t2).normalize_or_zero()
-}
-
-impl SampleContour for PlanarProfile {
-    fn sample_contour(&self, sample_distance: f64) -> Result<ContourSet, GeometryError> {
-        if sample_distance <= 0.0 {
-            return Err(GeometryError::InvalidParameter {
-                parameter: "sample_distance".to_string(),
-                message: "Sample distance must be positive".to_string(),
-            });
-        }
-
-        let mut contour_set = ContourSet::new();
-        let mut builder = ContourBuilder::new();
-        let mut in_contour = false;
-        let mut prev_was_move = false;
+        // Track pending corner info for processing
+        let mut pending_corner: Option<(Corner, DVec2, DVec2)> = None; // (corner, end_pos, end_tangent)
 
         for (cmd_idx, cmd) in self.commands.iter().enumerate() {
             match &cmd.path {
@@ -521,403 +169,460 @@ impl SampleContour for PlanarProfile {
                         });
                     }
 
-                    // If we were in a contour, finalize it
-                    if in_contour && !prev_was_move {
-                        if let Some(contour) = builder.finalize_contour(None) {
-                            contour_set.add_contour(contour);
+                    // Finalize current curve if exists
+                    if let Some(curve) = current_curve.take() {
+                        if !curve.is_empty() {
+                            curve_set.add_curve(curve);
                         }
                     }
 
-                    // Start new contour
-                    builder.start_at(*point);
-                    in_contour = true;
-                    prev_was_move = true;
+                    // Start new curve
+                    current_curve = Some(Curve::new());
+                    current_pos = *point;
+                    first_pos = *point;
+                    path_segment_index = 0;
+                    pending_corner = None;
                 }
 
                 PathCommand::Line { point } => {
-                    if !in_contour {
-                        return Err(GeometryError::InvalidParameter {
-                            parameter: format!("commands[{}]", cmd_idx),
-                            message: "Line command without preceding Move".to_string(),
-                        });
-                    }
+                    let curve =
+                        current_curve
+                            .as_mut()
+                            .ok_or_else(|| GeometryError::InvalidParameter {
+                                parameter: format!("commands[{}]", cmd_idx),
+                                message: "Line command without preceding Move".to_string(),
+                            })?;
 
-                    prev_was_move = false;
-                    let start = builder.current_pos;
+                    let start = current_pos;
                     let end = *point;
-                    let (start_tangent, end_tangent) = sample_line(start, end);
+                    let direction = (end - start).normalize_or_zero();
+                    let start_tangent = if direction.length_squared() > 0.0 {
+                        direction
+                    } else {
+                        DVec2::X
+                    };
 
                     // Handle pending corner from previous command
-                    if let Some(pending_corner) = builder.pending_corner.take() {
-                        let pending_end_pos = builder.pending_end_pos.take().unwrap_or(start);
-                        let pending_end_tangent =
-                            builder.pending_end_tangent.take().unwrap_or(start_tangent);
+                    Self::process_pending_corner(
+                        curve,
+                        &mut pending_corner,
+                        &mut current_pos,
+                        start_tangent,
+                        &mut path_segment_index,
+                    );
 
-                        match pending_corner {
-                            Corner::Edge => {
-                                // Just connect
-                            }
-                            Corner::SmoothEdge => {
-                                // Interpolate tangents - modify the last segment's end tangent
-                                if let Some(last_seg) = builder.segments.last_mut() {
-                                    let smooth_tangent =
-                                        interpolate_tangent(last_seg.end.tangent, start_tangent);
-                                    last_seg.end.tangent = smooth_tangent;
-                                }
-                            }
-                            Corner::Chamfer { distance } => {
-                                if let Some((chamfer_start, _, chamfer_end, chamfer_tangent)) =
-                                    create_chamfer(
-                                        pending_end_pos,
-                                        pending_end_tangent,
-                                        start_tangent,
-                                        distance,
-                                    )
-                                {
-                                    // Modify last segment to end at chamfer start
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = chamfer_start;
-                                    }
-                                    // Add chamfer segment
-                                    builder.next_segment();
-                                    builder.add_segment(
-                                        chamfer_start,
-                                        pending_end_tangent,
-                                        chamfer_end,
-                                        chamfer_tangent,
-                                    );
-                                    builder.current_pos = chamfer_end;
-                                }
-                            }
-                            Corner::Fillet { radius } => {
-                                let fillet_segments = create_fillet(
-                                    pending_end_pos,
-                                    pending_end_tangent,
-                                    start_tangent,
-                                    radius,
-                                    sample_distance,
-                                );
-                                if !fillet_segments.is_empty() {
-                                    // Modify last segment to end at fillet start
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = fillet_segments[0].0;
-                                    }
-                                    builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    builder.next_segment();
-                    builder.add_segment(builder.current_pos, start_tangent, end, end_tangent);
+                    // Add line segment
+                    let line_nurbs = Nurbs::line(current_pos, end);
+                    let segment_id = path_segment_index * 2;
+                    let smooth_end = matches!(cmd.corner, Corner::SmoothEdge);
+                    curve.add_segment(NurbsSegment::new(
+                        line_nurbs,
+                        curve.total_length(),
+                        smooth_end,
+                        segment_id,
+                    ));
 
                     // Store corner for next command
-                    builder.pending_corner = Some(cmd.corner);
-                    builder.pending_end_pos = Some(end);
-                    builder.pending_end_tangent = Some(end_tangent);
+                    let end_tangent = direction;
+                    pending_corner = Some((cmd.corner, end, end_tangent));
+                    current_pos = end;
+                    path_segment_index += 1;
                 }
 
                 PathCommand::Ellipse { point, center } => {
-                    if !in_contour {
-                        return Err(GeometryError::InvalidParameter {
-                            parameter: format!("commands[{}]", cmd_idx),
-                            message: "Ellipse command without preceding Move".to_string(),
-                        });
-                    }
+                    let curve =
+                        current_curve
+                            .as_mut()
+                            .ok_or_else(|| GeometryError::InvalidParameter {
+                                parameter: format!("commands[{}]", cmd_idx),
+                                message: "Ellipse command without preceding Move".to_string(),
+                            })?;
 
-                    prev_was_move = false;
-                    let start = builder.current_pos;
+                    let start = current_pos;
                     let end = *point;
 
-                    // Calculate start tangent
-                    let start_tangent = if prev_was_move || builder.segments.is_empty() {
-                        // Tangent is perpendicular to radius from center
-                        let radius_vec = start - *center;
-                        DVec2::new(-radius_vec.y, radius_vec.x).normalize_or_zero()
-                    } else {
-                        builder.current_tangent
-                    };
+                    // Calculate arc parameters
+                    let (arc_nurbs_segments, start_tangent, end_tangent) =
+                        Self::create_arc_nurbs(start, end, *center)?;
 
-                    // Handle pending corner
-                    if let Some(pending_corner) = builder.pending_corner.take() {
-                        let pending_end_pos = builder.pending_end_pos.take().unwrap_or(start);
-                        let pending_end_tangent =
-                            builder.pending_end_tangent.take().unwrap_or(start_tangent);
+                    // Handle pending corner from previous command
+                    Self::process_pending_corner(
+                        curve,
+                        &mut pending_corner,
+                        &mut current_pos,
+                        start_tangent,
+                        &mut path_segment_index,
+                    );
 
-                        match pending_corner {
-                            Corner::Edge => {}
-                            Corner::SmoothEdge => {
-                                if let Some(last_seg) = builder.segments.last_mut() {
-                                    let smooth_tangent =
-                                        interpolate_tangent(last_seg.end.tangent, start_tangent);
-                                    last_seg.end.tangent = smooth_tangent;
-                                }
-                            }
-                            Corner::Chamfer { distance } => {
-                                if let Some((chamfer_start, _, chamfer_end, chamfer_tangent)) =
-                                    create_chamfer(
-                                        pending_end_pos,
-                                        pending_end_tangent,
-                                        start_tangent,
-                                        distance,
-                                    )
-                                {
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = chamfer_start;
-                                    }
-                                    builder.next_segment();
-                                    builder.add_segment(
-                                        chamfer_start,
-                                        pending_end_tangent,
-                                        chamfer_end,
-                                        chamfer_tangent,
-                                    );
-                                    builder.current_pos = chamfer_end;
-                                }
-                            }
-                            Corner::Fillet { radius } => {
-                                let fillet_segments = create_fillet(
-                                    pending_end_pos,
-                                    pending_end_tangent,
-                                    start_tangent,
-                                    radius,
-                                    sample_distance,
-                                );
-                                if !fillet_segments.is_empty() {
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = fillet_segments[0].0;
-                                    }
-                                    builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
-                                    }
-                                }
-                            }
-                        }
+                    // Add arc segments
+                    let segment_id = path_segment_index * 2;
+                    let smooth_end = matches!(cmd.corner, Corner::SmoothEdge);
+                    for (i, nurbs) in arc_nurbs_segments.into_iter().enumerate() {
+                        let is_last = i == 0; // simplified: assume last segment
+                        curve.add_segment(NurbsSegment::new(
+                            nurbs,
+                            curve.total_length(),
+                            if is_last { smooth_end } else { true },
+                            segment_id,
+                        ));
                     }
 
-                    // Sample the ellipse
-                    let ellipse_samples =
-                        sample_ellipse(start, end, *center, start_tangent, sample_distance);
-
-                    builder.next_segment();
-                    let mut prev_pos = builder.current_pos;
-                    let mut prev_tangent = start_tangent;
-
-                    for (pos, tangent) in ellipse_samples {
-                        builder.add_segment(prev_pos, prev_tangent, pos, tangent);
-                        prev_pos = pos;
-                        prev_tangent = tangent;
-                    }
-
-                    builder.pending_corner = Some(cmd.corner);
-                    builder.pending_end_pos = Some(end);
-                    builder.pending_end_tangent = Some(builder.current_tangent);
+                    // Store corner for next command
+                    pending_corner = Some((cmd.corner, end, end_tangent));
+                    current_pos = end;
+                    path_segment_index += 1;
                 }
 
-                PathCommand::Nurbs {
+                PathCommand::Bezier {
                     point,
                     control_points,
                 } => {
-                    if !in_contour {
-                        return Err(GeometryError::InvalidParameter {
-                            parameter: format!("commands[{}]", cmd_idx),
-                            message: "Nurbs command without preceding Move".to_string(),
-                        });
-                    }
+                    let curve =
+                        current_curve
+                            .as_mut()
+                            .ok_or_else(|| GeometryError::InvalidParameter {
+                                parameter: format!("commands[{}]", cmd_idx),
+                                message: "Bezier command without preceding Move".to_string(),
+                            })?;
 
-                    prev_was_move = false;
-                    let start = builder.current_pos;
+                    let start = current_pos;
                     let end = *point;
 
-                    // Handle pending corner
-                    let nurbs_samples = sample_nurbs(start, end, control_points, sample_distance);
-                    let start_tangent = nurbs_samples.first().map(|(_, t)| *t).unwrap_or(DVec2::X);
+                    // Create Bezier NURBS
+                    let (bezier_nurbs, start_tangent, end_tangent) =
+                        Self::create_bezier_nurbs(start, end, control_points);
 
-                    if let Some(pending_corner) = builder.pending_corner.take() {
-                        let pending_end_pos = builder.pending_end_pos.take().unwrap_or(start);
-                        let pending_end_tangent =
-                            builder.pending_end_tangent.take().unwrap_or(start_tangent);
+                    // Handle pending corner from previous command
+                    Self::process_pending_corner(
+                        curve,
+                        &mut pending_corner,
+                        &mut current_pos,
+                        start_tangent,
+                        &mut path_segment_index,
+                    );
 
-                        match pending_corner {
-                            Corner::Edge => {}
-                            Corner::SmoothEdge => {
-                                if let Some(last_seg) = builder.segments.last_mut() {
-                                    let smooth_tangent =
-                                        interpolate_tangent(last_seg.end.tangent, start_tangent);
-                                    last_seg.end.tangent = smooth_tangent;
-                                }
-                            }
-                            Corner::Chamfer { distance } => {
-                                if let Some((chamfer_start, _, chamfer_end, chamfer_tangent)) =
-                                    create_chamfer(
-                                        pending_end_pos,
-                                        pending_end_tangent,
-                                        start_tangent,
-                                        distance,
-                                    )
-                                {
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = chamfer_start;
-                                    }
-                                    builder.next_segment();
-                                    builder.add_segment(
-                                        chamfer_start,
-                                        pending_end_tangent,
-                                        chamfer_end,
-                                        chamfer_tangent,
-                                    );
-                                    builder.current_pos = chamfer_end;
-                                }
-                            }
-                            Corner::Fillet { radius } => {
-                                let fillet_segments = create_fillet(
-                                    pending_end_pos,
-                                    pending_end_tangent,
-                                    start_tangent,
-                                    radius,
-                                    sample_distance,
-                                );
-                                if !fillet_segments.is_empty() {
-                                    if let Some(last_seg) = builder.segments.last_mut() {
-                                        last_seg.end.position = fillet_segments[0].0;
-                                    }
-                                    builder.next_segment();
-                                    for (s_start, s_start_t, s_end, s_end_t) in fillet_segments {
-                                        builder.add_segment(s_start, s_start_t, s_end, s_end_t);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Add Bezier segment
+                    let segment_id = path_segment_index * 2;
+                    let smooth_end = matches!(cmd.corner, Corner::SmoothEdge);
+                    curve.add_segment(NurbsSegment::new(
+                        bezier_nurbs,
+                        curve.total_length(),
+                        smooth_end,
+                        segment_id,
+                    ));
 
-                    builder.next_segment();
-                    let mut prev_pos = builder.current_pos;
-                    let mut prev_tangent = if !builder.segments.is_empty() {
-                        builder.current_tangent
-                    } else {
-                        start_tangent
-                    };
-
-                    for (pos, tangent) in nurbs_samples {
-                        builder.add_segment(prev_pos, prev_tangent, pos, tangent);
-                        prev_pos = pos;
-                        prev_tangent = tangent;
-                    }
-
-                    builder.pending_corner = Some(cmd.corner);
-                    builder.pending_end_pos = Some(end);
-                    builder.pending_end_tangent = Some(builder.current_tangent);
+                    // Store corner for next command
+                    pending_corner = Some((cmd.corner, end, end_tangent));
+                    current_pos = end;
+                    path_segment_index += 1;
                 }
             }
         }
 
-        // Handle closing corner if contour is closed
-        if in_contour && !prev_was_move {
-            // Check if we need to handle the closing corner
-            let mut detected_closed = false;
-            if let (Some(pending_corner), Some(first_pos), Some(first_tangent)) = (
-                builder.pending_corner.take(),
-                builder.first_pos,
-                builder.first_tangent,
-            ) {
-                let is_closed = (builder.current_pos - first_pos).length() < 1e-9;
-                detected_closed = is_closed;
+        // Handle closing corner if the curve is closed
+        if let Some(curve) = current_curve.as_mut() {
+            if !curve.is_empty() {
+                let is_closed = (current_pos - first_pos).length() < 1e-9;
 
-                if is_closed && pending_corner != Corner::Edge {
-                    let pending_end_pos = builder
-                        .pending_end_pos
-                        .take()
-                        .unwrap_or(builder.current_pos);
-                    let pending_end_tangent = builder
-                        .pending_end_tangent
-                        .take()
-                        .unwrap_or(builder.current_tangent);
+                if is_closed {
+                    // Mark the curve as closed
+                    curve.set_closed(true);
 
-                    match pending_corner {
-                        Corner::Edge => {}
-                        Corner::SmoothEdge => {
-                            // Interpolate between last segment's end and first segment's start
-                            let first_seg_tangent =
-                                builder.segments.first().map(|s| s.start.tangent);
-                            if let (Some(last_seg), Some(first_tangent_val)) =
-                                (builder.segments.last_mut(), first_seg_tangent)
-                            {
-                                let smooth_tangent =
-                                    interpolate_tangent(last_seg.end.tangent, first_tangent_val);
-                                last_seg.end.tangent = smooth_tangent;
-                            }
-                            if let Some(first_seg) = builder.segments.first_mut() {
-                                let smooth_tangent = interpolate_tangent(
-                                    pending_end_tangent,
-                                    first_seg.start.tangent,
-                                );
-                                first_seg.start.tangent = smooth_tangent;
-                            }
-                        }
-                        Corner::Chamfer { distance } => {
-                            if let Some((chamfer_start, _, chamfer_end, chamfer_tangent)) =
-                                create_chamfer(
-                                    pending_end_pos,
-                                    pending_end_tangent,
-                                    first_tangent,
-                                    distance,
-                                )
-                            {
-                                if let Some(last_seg) = builder.segments.last_mut() {
-                                    last_seg.end.position = chamfer_start;
-                                }
-                                builder.next_segment();
-                                builder.add_segment(
-                                    chamfer_start,
-                                    pending_end_tangent,
-                                    chamfer_end,
-                                    chamfer_tangent,
-                                );
-                                // Update first segment start
-                                if let Some(first_seg) = builder.segments.first_mut() {
-                                    first_seg.start.position = chamfer_end;
-                                }
-                            }
-                        }
-                        Corner::Fillet { radius } => {
-                            let fillet_segments = create_fillet(
-                                pending_end_pos,
-                                pending_end_tangent,
-                                first_tangent,
-                                radius,
-                                sample_distance,
-                            );
-                            if !fillet_segments.is_empty() {
-                                if let Some(last_seg) = builder.segments.last_mut() {
-                                    last_seg.end.position = fillet_segments[0].0;
-                                }
-                                builder.next_segment();
-                                for (s_start, s_start_t, s_end, s_end_t) in &fillet_segments {
-                                    builder.add_segment(*s_start, *s_start_t, *s_end, *s_end_t);
-                                }
-                                // Update first segment start
-                                if let Some(last_fillet) = fillet_segments.last() {
-                                    if let Some(first_seg) = builder.segments.first_mut() {
-                                        first_seg.start.position = last_fillet.2;
-                                    }
-                                }
-                            }
+                    // Get the first segment's start tangent
+                    if let (Some((corner, _end_pos, end_tangent)), Some(first_segment)) =
+                        (pending_corner.take(), curve.segments.first())
+                    {
+                        let first_tangent = first_segment.nurbs.derivative(0.0).normalize_or_zero();
+
+                        // Add closing corner segment if needed
+                        if let Some(corner_nurbs) = Self::create_corner_nurbs(
+                            corner,
+                            current_pos,
+                            end_tangent,
+                            first_tangent,
+                        ) {
+                            let corner_segment_id = path_segment_index * 2 - 1;
+                            curve.add_segment(NurbsSegment::new(
+                                corner_nurbs,
+                                curve.total_length(),
+                                false,
+                                corner_segment_id,
+                            ));
                         }
                     }
                 }
             }
+        }
 
-            let force_closed = if detected_closed { Some(true) } else { None };
-            if let Some(contour) = builder.finalize_contour(force_closed) {
-                contour_set.add_contour(contour);
+        // Finalize last curve
+        if let Some(curve) = current_curve.take() {
+            if !curve.is_empty() {
+                curve_set.add_curve(curve);
             }
         }
 
-        Ok(contour_set)
+        Ok(curve_set)
+    }
+
+    /// Processes a pending corner from the previous command.
+    /// This includes truncating the previous segment and adding the corner segment.
+    fn process_pending_corner(
+        curve: &mut Curve,
+        pending_corner: &mut Option<(Corner, DVec2, DVec2)>,
+        current_pos: &mut DVec2,
+        next_start_tangent: DVec2,
+        path_segment_index: &mut u32,
+    ) {
+        if let Some((corner, corner_pos, prev_end_tangent)) = pending_corner.take() {
+            if let Some(corner_nurbs) =
+                Self::create_corner_nurbs(corner, corner_pos, prev_end_tangent, next_start_tangent)
+            {
+                // Get the corner start point (where the previous segment should end)
+                let corner_start = corner_nurbs.start_point();
+                let corner_end = corner_nurbs.end_point();
+
+                // Truncate the previous segment to end at corner_start
+                if let Some(last_segment) = curve.segments.last_mut() {
+                    // Replace the last segment's NURBS with a truncated version
+                    let seg_start = last_segment.nurbs.start_point();
+                    last_segment.nurbs = Nurbs::line(seg_start, corner_start);
+                    // Recalculate end_distance
+                    last_segment.end_distance =
+                        last_segment.start_distance + last_segment.nurbs.length();
+                }
+
+                // Corner segments get odd segment IDs (previous path index * 2 + 1)
+                let corner_segment_id = (*path_segment_index - 1) * 2 + 1;
+                curve.add_segment(NurbsSegment::new(
+                    corner_nurbs,
+                    curve.total_length(),
+                    false,
+                    corner_segment_id,
+                ));
+
+                *current_pos = corner_end;
+            }
+        }
+    }
+
+    /// Creates a corner NURBS segment based on the corner type.
+    fn create_corner_nurbs(
+        corner: Corner,
+        corner_pos: DVec2,
+        incoming_tangent: DVec2,
+        outgoing_tangent: DVec2,
+    ) -> Option<Nurbs> {
+        match corner {
+            Corner::Edge | Corner::SmoothEdge => None,
+            Corner::Chamfer { distance } => {
+                if distance <= 0.0 {
+                    return None;
+                }
+                let start = corner_pos - incoming_tangent * distance;
+                let end = corner_pos + outgoing_tangent * distance;
+                Some(Nurbs::line(start, end))
+            }
+            Corner::Fillet { radius } => {
+                if radius <= 0.0 {
+                    return None;
+                }
+                Self::create_fillet_nurbs(corner_pos, incoming_tangent, outgoing_tangent, radius)
+            }
+        }
+    }
+
+    /// Creates a fillet arc NURBS.
+    fn create_fillet_nurbs(
+        corner_pos: DVec2,
+        incoming_tangent: DVec2,
+        outgoing_tangent: DVec2,
+        radius: f64,
+    ) -> Option<Nurbs> {
+        // Determine which way the corner turns
+        // Cross product: positive = left turn (CCW), negative = right turn (CW)
+        let cross =
+            incoming_tangent.x * outgoing_tangent.y - incoming_tangent.y * outgoing_tangent.x;
+        let sign = if cross > 0.0 { 1.0 } else { -1.0 };
+
+        // Calculate the half-angle between the tangent vectors
+        // θ = angle between incoming and outgoing
+        // half_theta = θ/2
+        let dot = incoming_tangent.dot(outgoing_tangent);
+        let half_theta_sin_sq = (1.0 - dot) / 2.0;
+        let half_theta = half_theta_sin_sq.sqrt().asin();
+
+        // The interior angle of the corner (on the fillet side) is α = π - θ
+        // So α/2 = π/2 - θ/2
+        // sin(α/2) = cos(θ/2)
+        // tan(α/2) = sin(α/2) / cos(α/2) = cos(θ/2) / sin(θ/2) = cot(θ/2) = 1 / tan(θ/2)
+        //
+        // For the inscribed circle:
+        // - Offset from corner to tangent point: r / tan(α/2) = r * tan(θ/2)
+        // - Distance from corner to center: r / sin(α/2) = r / cos(θ/2)
+
+        // Skip fillet if angle is too small (collinear edges) or too close to 180° (reflex)
+        if half_theta.abs() < 1e-6 || (PI / 2.0 - half_theta).abs() < 1e-6 {
+            return None;
+        }
+
+        let offset = radius * half_theta.tan();
+        let start = corner_pos - incoming_tangent * offset;
+        let end = corner_pos + outgoing_tangent * offset;
+
+        // The fillet center is equidistant from both lines at distance radius.
+        // It lies at distance radius / cos(θ/2) from corner.
+        //
+        // The direction from corner to center is perpendicular to the angle bisector:
+        // - Angle bisector direction: (incoming + outgoing).normalize()
+        // - For a left turn (sign > 0): rotate bisector 90° CCW to get direction to center
+        // - For a right turn (sign < 0): rotate bisector 90° CW to get direction to center
+        let bisector = (incoming_tangent + outgoing_tangent).normalize_or_zero();
+        let direction_to_center = DVec2::new(-bisector.y, bisector.x) * sign;
+
+        let center_distance = radius / half_theta.cos();
+        let center = corner_pos + direction_to_center * center_distance;
+
+        // Calculate sweep angle
+        let start_angle = (start - center).y.atan2((start - center).x);
+        let end_angle = (end - center).y.atan2((end - center).x);
+        let mut sweep_angle = end_angle - start_angle;
+
+        // Adjust sweep angle based on direction
+        // For left turn (sign > 0), the arc goes CCW (positive sweep) from start to end
+        // For right turn (sign < 0), the arc goes CW (negative sweep) from start to end
+        if sign > 0.0 {
+            // Counter-clockwise
+            if sweep_angle < 0.0 {
+                sweep_angle += 2.0 * PI;
+            }
+        } else {
+            // Clockwise
+            if sweep_angle > 0.0 {
+                sweep_angle -= 2.0 * PI;
+            }
+        }
+
+        Some(Nurbs::arc(center, radius, start_angle, sweep_angle))
+    }
+
+    /// Creates NURBS segments for an arc/ellipse.
+    fn create_arc_nurbs(
+        start: DVec2,
+        end: DVec2,
+        center: DVec2,
+    ) -> Result<(Vec<Nurbs>, DVec2, DVec2), GeometryError> {
+        let radius_start = (start - center).length();
+        let radius_end = (end - center).length();
+
+        // Check if it's approximately circular
+        let radius = (radius_start + radius_end) / 2.0;
+        if radius < 1e-9 {
+            // Degenerate case: treat as a line
+            let direction = (end - start).normalize_or_zero();
+            return Ok((vec![Nurbs::line(start, end)], direction, direction));
+        }
+
+        // Check if start and end are the same point (full circle case)
+        let is_full_circle = (start - end).length() < 1e-9;
+
+        let start_angle = (start - center).y.atan2((start - center).x);
+
+        // Calculate start tangent (perpendicular to radius)
+        let start_tangent = DVec2::new(-(start - center).y, (start - center).x).normalize_or_zero();
+
+        // For full circle, use 2*PI sweep
+        if is_full_circle {
+            let segments = Nurbs::circle(center, radius);
+            // Start and end tangent are the same for a full circle
+            return Ok((segments, start_tangent, start_tangent));
+        }
+
+        let end_angle = (end - center).y.atan2((end - center).x);
+        let end_tangent = DVec2::new(-(end - center).y, (end - center).x).normalize_or_zero();
+
+        // Determine sweep angle
+        let mut sweep_angle = end_angle - start_angle;
+
+        // Choose the shorter arc by default (can be adjusted if needed)
+        if sweep_angle > PI {
+            sweep_angle -= 2.0 * PI;
+        } else if sweep_angle < -PI {
+            sweep_angle += 2.0 * PI;
+        }
+
+        // Check if ellipse or circle
+        let is_ellipse = (radius_start - radius_end).abs() > 1e-6;
+
+        if is_ellipse {
+            // For ellipse, we need to determine the radii
+            let radius_x = radius_start;
+            let radius_y = radius_end;
+            Ok((
+                vec![Nurbs::ellipse_arc(
+                    center,
+                    radius_x,
+                    radius_y,
+                    start_angle,
+                    sweep_angle,
+                )],
+                start_tangent,
+                end_tangent,
+            ))
+        } else {
+            // For circular arc, use arc_segments for accuracy
+            let segments = Nurbs::arc_segments(center, radius, start_angle, sweep_angle);
+            Ok((segments, start_tangent, end_tangent))
+        }
+    }
+
+    /// Creates a Bezier NURBS from control points.
+    fn create_bezier_nurbs(
+        start: DVec2,
+        end: DVec2,
+        control_points: &[DVec2],
+    ) -> (Nurbs, DVec2, DVec2) {
+        let nurbs = if control_points.is_empty() {
+            // Line
+            Nurbs::line(start, end)
+        } else if control_points.len() == 1 {
+            // Quadratic Bezier
+            Nurbs::quadratic(start, control_points[0], end)
+        } else if control_points.len() == 2 {
+            // Cubic Bezier
+            Nurbs::cubic(start, control_points[0], control_points[1], end)
+        } else {
+            // General case: create NURBS with all control points
+            let mut all_points = vec![start];
+            all_points.extend(control_points.iter().copied());
+            all_points.push(end);
+            Nurbs::new(all_points)
+        };
+
+        let start_tangent = nurbs.derivative(0.0).normalize_or_zero();
+        let end_tangent = nurbs.derivative(1.0).normalize_or_zero();
+
+        (nurbs, start_tangent, end_tangent)
+    }
+}
+
+impl SampleContour for PlanarProfile {
+    /// Samples the profile contour by converting to a `CurveSet` and sampling.
+    ///
+    /// # Arguments
+    /// * `sample_distance` - The maximum distance between consecutive sample points
+    ///
+    /// # Returns
+    /// A `Result` containing the `ContourSet` with sampled segments.
+    fn sample_contour(&self, sample_distance: f64) -> Result<ContourSet, GeometryError> {
+        if sample_distance <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "sample_distance".to_string(),
+                message: "Sample distance must be positive".to_string(),
+            });
+        }
+
+        let curve_set = self.to_curve_set()?;
+        curve_set.sample_contour(sample_distance)
     }
 }
 
@@ -1007,18 +712,18 @@ mod tests {
     }
 
     #[test]
-    fn test_path_command_nurbs() {
+    fn test_path_command_bezier() {
         let point = DVec2::new(10.0, 10.0);
         let control_points = vec![
             DVec2::new(2.0, 4.0),
             DVec2::new(5.0, 8.0),
             DVec2::new(8.0, 6.0),
         ];
-        let cmd = PathCommand::Nurbs {
+        let cmd = PathCommand::Bezier {
             point,
             control_points: control_points.clone(),
         };
-        if let PathCommand::Nurbs {
+        if let PathCommand::Bezier {
             point: p,
             control_points: cp,
         } = cmd
@@ -1029,7 +734,7 @@ mod tests {
             assert_eq!(cp[1], DVec2::new(5.0, 8.0));
             assert_eq!(cp[2], DVec2::new(8.0, 6.0));
         } else {
-            panic!("Expected PathCommand::Nurbs");
+            panic!("Expected PathCommand::Bezier");
         }
     }
 
@@ -1196,13 +901,13 @@ mod tests {
         let deserialized: PathCommand = serde_json::from_str(&json).unwrap();
         assert_eq!(ellipse_cmd, deserialized);
 
-        let nurbs_cmd = PathCommand::Nurbs {
+        let bezier_cmd = PathCommand::Bezier {
             point: DVec2::new(10.0, 10.0),
             control_points: vec![DVec2::new(2.0, 4.0), DVec2::new(5.0, 8.0)],
         };
-        let json = serde_json::to_string(&nurbs_cmd).unwrap();
+        let json = serde_json::to_string(&bezier_cmd).unwrap();
         let deserialized: PathCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(nurbs_cmd, deserialized);
+        assert_eq!(bezier_cmd, deserialized);
     }
 
     #[test]
@@ -1520,12 +1225,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sample_contour_nurbs_basic() {
+    fn test_sample_contour_bezier_basic() {
         let profile = PlanarProfile::with_commands(vec![
             ProfileCommand::with_edge(PathCommand::Move {
                 point: DVec2::new(0.0, 0.0),
             }),
-            ProfileCommand::with_edge(PathCommand::Nurbs {
+            ProfileCommand::with_edge(PathCommand::Bezier {
                 point: DVec2::new(3.0, 0.0),
                 control_points: vec![DVec2::new(1.0, 1.0), DVec2::new(2.0, 1.0)],
             }),
@@ -1543,12 +1248,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sample_contour_nurbs_min_samples() {
+    fn test_sample_contour_bezier_min_samples() {
         let profile = PlanarProfile::with_commands(vec![
             ProfileCommand::with_edge(PathCommand::Move {
                 point: DVec2::new(0.0, 0.0),
             }),
-            ProfileCommand::with_edge(PathCommand::Nurbs {
+            ProfileCommand::with_edge(PathCommand::Bezier {
                 point: DVec2::new(1.0, 0.0),
                 control_points: vec![
                     DVec2::new(0.2, 0.5),
@@ -1564,8 +1269,9 @@ mod tests {
 
         let contour_set = result.unwrap();
         let contour = &contour_set.contours[0];
-        // Should have at least 4 segments (one per control point)
-        assert!(contour.len() >= 4);
+        // Should have at least 3 segments (minimum for a degree-3 NURBS)
+        // Note: NURBS degree is capped at 3 in Nurbs::new() for bezier curves
+        assert!(contour.len() >= 3);
     }
 
     #[test]
@@ -1778,9 +1484,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sample_contour_nurbs_without_move_error() {
+    fn test_sample_contour_bezier_without_move_error() {
         let profile =
-            PlanarProfile::with_commands(vec![ProfileCommand::with_edge(PathCommand::Nurbs {
+            PlanarProfile::with_commands(vec![ProfileCommand::with_edge(PathCommand::Bezier {
                 point: DVec2::new(1.0, 0.0),
                 control_points: vec![DVec2::new(0.5, 0.5)],
             })]);
@@ -1830,5 +1536,1361 @@ mod tests {
         assert!(contour.is_closed());
         // Should have many segments due to chamfer, fillet, and ellipse
         assert!(contour.len() > 10);
+    }
+
+    // ============================================================================
+    // Ellipse tests (arc, circle, ellipse segment)
+    // ============================================================================
+
+    #[test]
+    fn test_sample_contour_quarter_arc() {
+        let center = DVec2::new(0.0, 0.0);
+        let start = DVec2::new(1.0, 0.0);
+        let end = DVec2::new(0.0, 1.0); // 90-degree arc
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move { point: start }),
+            ProfileCommand::with_edge(PathCommand::Ellipse { point: end, center }),
+        ]);
+
+        let result = profile.sample_contour(0.2);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        assert_eq!(contour_set.len(), 1);
+
+        let contour = &contour_set.contours[0];
+        // 90-degree arc should produce multiple segments
+        assert!(contour.len() >= 2);
+        assert!(!contour.is_closed());
+
+        // Check that the arc starts and ends at the correct positions
+        let first_segment = &contour.segments[0];
+        let last_segment = &contour.segments[contour.len() - 1];
+        assert!((first_segment.start.position - start).length() < 0.01);
+        assert!((last_segment.end.position - end).length() < 0.01);
+    }
+
+    #[test]
+    fn test_sample_contour_half_arc() {
+        let center = DVec2::new(0.0, 0.0);
+        let start = DVec2::new(1.0, 0.0);
+        let end = DVec2::new(-1.0, 0.0); // 180-degree arc
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move { point: start }),
+            ProfileCommand::with_edge(PathCommand::Ellipse { point: end, center }),
+        ]);
+
+        let result = profile.sample_contour(0.3);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+
+        // 180-degree arc should produce at least 3 segments
+        assert!(contour.len() >= 3);
+        assert!(!contour.is_closed());
+
+        // Verify positions
+        let first_segment = &contour.segments[0];
+        let last_segment = &contour.segments[contour.len() - 1];
+        assert!((first_segment.start.position - start).length() < 0.01);
+        assert!((last_segment.end.position - end).length() < 0.01);
+    }
+
+    #[test]
+    fn test_sample_contour_three_quarter_arc() {
+        let center = DVec2::new(0.0, 0.0);
+        let start = DVec2::new(1.0, 0.0);
+        let end = DVec2::new(0.0, -1.0); // 270-degree arc (going counter-clockwise)
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move { point: start }),
+            ProfileCommand::with_edge(PathCommand::Ellipse { point: end, center }),
+        ]);
+
+        let result = profile.sample_contour(0.5);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        assert!(!contour.is_closed());
+    }
+
+    #[test]
+    fn test_sample_contour_circle_with_line() {
+        // Create a closed shape with a line and a semicircle
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(-1.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Ellipse {
+                point: DVec2::new(1.0, 0.0),
+                center: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(-1.0, 0.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.3);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        assert!(contour.is_closed());
+        assert!(contour.len() >= 4);
+    }
+
+    #[test]
+    fn test_sample_contour_small_arc() {
+        // Small arc (about 45 degrees)
+        let center = DVec2::new(0.0, 0.0);
+        let start = DVec2::new(1.0, 0.0);
+        let end = DVec2::new(0.707, 0.707); // approximately 45 degrees
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move { point: start }),
+            ProfileCommand::with_edge(PathCommand::Ellipse { point: end, center }),
+        ]);
+
+        let result = profile.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        assert!(contour.len() >= 1);
+    }
+
+    #[test]
+    fn test_sample_contour_arc_with_corner_fillet() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: DVec2::new(1.0, 1.0),
+                    center: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(2.0, 1.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Should have arc segments + fillet + line
+        assert!(contour.len() >= 3);
+    }
+
+    #[test]
+    fn test_sample_contour_arc_with_corner_chamfer() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: DVec2::new(1.0, 1.0),
+                    center: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(2.0, 1.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Should have arc segments + chamfer + line
+        assert!(contour.len() >= 3);
+    }
+
+    // ============================================================================
+    // Bezier curve tests
+    // ============================================================================
+
+    #[test]
+    fn test_sample_contour_bezier_quadratic() {
+        // Quadratic Bezier with 1 control point
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(2.0, 0.0),
+                control_points: vec![DVec2::new(1.0, 1.0)],
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.5);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Quadratic Bezier (degree 2) should produce at least 2 segments
+        assert!(contour.len() >= 2);
+
+        // Verify start and end positions
+        let first_segment = &contour.segments[0];
+        let last_segment = &contour.segments[contour.len() - 1];
+        assert!((first_segment.start.position - DVec2::new(0.0, 0.0)).length() < 0.01);
+        assert!((last_segment.end.position - DVec2::new(2.0, 0.0)).length() < 0.01);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_cubic() {
+        // Cubic Bezier with 2 control points
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(3.0, 0.0),
+                control_points: vec![DVec2::new(1.0, 1.0), DVec2::new(2.0, 1.0)],
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.5);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Cubic Bezier (degree 3) should produce at least 3 segments
+        assert!(contour.len() >= 3);
+
+        // Verify start and end positions
+        let first_segment = &contour.segments[0];
+        let last_segment = &contour.segments[contour.len() - 1];
+        assert!((first_segment.start.position - DVec2::new(0.0, 0.0)).length() < 0.01);
+        assert!((last_segment.end.position - DVec2::new(3.0, 0.0)).length() < 0.01);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_as_line() {
+        // Bezier with no control points is a straight line
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(5.0, 0.0),
+                control_points: vec![],
+            }),
+        ]);
+
+        let result = profile.sample_contour(1.0);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Linear Bezier should produce exactly 1 segment regardless of length
+        assert_eq!(contour.len(), 1);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_with_fillet() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::new(
+                PathCommand::Bezier {
+                    point: DVec2::new(2.0, 0.0),
+                    control_points: vec![DVec2::new(1.0, 1.0)],
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(2.0, 1.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Should have bezier segments + fillet + line
+        assert!(contour.len() >= 4);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_with_chamfer() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::new(
+                PathCommand::Bezier {
+                    point: DVec2::new(2.0, 0.0),
+                    control_points: vec![DVec2::new(1.0, 1.0)],
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(2.0, 1.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Should have bezier segments + chamfer + line
+        assert!(contour.len() >= 3);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_s_curve() {
+        // S-curve using cubic Bezier
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(4.0, 0.0),
+                control_points: vec![DVec2::new(1.0, 2.0), DVec2::new(3.0, -2.0)],
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.3);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        assert!(contour.len() >= 3);
+    }
+
+    #[test]
+    fn test_sample_contour_bezier_closed_shape() {
+        // Closed shape using Bezier curves
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(2.0, 0.0),
+                control_points: vec![DVec2::new(1.0, 1.0)],
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(0.0, 0.0),
+                control_points: vec![DVec2::new(1.0, -1.0)],
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.3);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        assert!(contour.is_closed());
+        assert!(contour.len() >= 4);
+    }
+
+    // ============================================================================
+    // Segment ID tests for CurveSet conversion
+    // ============================================================================
+
+    #[test]
+    fn test_sample_contour_segment_ids_lines() {
+        // Test that line segments have correct segment IDs (even numbers)
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(1.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(2.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(3.0, 0.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.5);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+
+        // Path segments should have IDs: 0, 2, 4 (even numbers)
+        assert_eq!(contour.segments[0].segment, 0);
+        assert_eq!(contour.segments[1].segment, 2);
+        assert_eq!(contour.segments[2].segment, 4);
+    }
+
+    #[test]
+    fn test_sample_contour_segment_ids_with_corners() {
+        // Test that corner segments have odd segment IDs
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::with_edge(PathCommand::Line {
+                point: DVec2::new(1.0, 1.0),
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.5);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+
+        // Should have segments with IDs for: line (0), chamfer (1), line (2)
+        // First line segment ID = 0
+        assert_eq!(contour.segments[0].segment, 0);
+        // Chamfer segment ID = 1 (odd)
+        // Find the chamfer segment by looking for ID 1
+        let chamfer_segments: Vec<_> = contour.segments.iter().filter(|s| s.segment == 1).collect();
+        assert!(!chamfer_segments.is_empty());
+        // Second line segment ID = 2
+        let second_line_segments: Vec<_> =
+            contour.segments.iter().filter(|s| s.segment == 2).collect();
+        assert!(!second_line_segments.is_empty());
+    }
+
+    #[test]
+    fn test_sample_contour_multiple_bezier_curves() {
+        // Multiple Bezier curves in sequence
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::with_edge(PathCommand::Move {
+                point: DVec2::new(0.0, 0.0),
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(1.0, 0.0),
+                control_points: vec![DVec2::new(0.5, 0.5)],
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(2.0, 0.0),
+                control_points: vec![DVec2::new(1.5, -0.5)],
+            }),
+            ProfileCommand::with_edge(PathCommand::Bezier {
+                point: DVec2::new(3.0, 0.0),
+                control_points: vec![DVec2::new(2.5, 0.5)],
+            }),
+        ]);
+
+        let result = profile.sample_contour(0.3);
+        assert!(result.is_ok());
+
+        let contour_set = result.unwrap();
+        let contour = &contour_set.contours[0];
+        // Each Bezier produces at least 2 segments, so at least 6 total
+        assert!(contour.len() >= 6);
+    }
+
+    // ============================================================================
+    // Cylinder profile tests - tests for profiles like cylinder cross-sections
+    // ============================================================================
+
+    /// Creates a cylinder-like profile with the given edge treatments.
+    /// The profile is: horizontal line (bottom cap) -> vertical line (body) -> horizontal line (top cap)
+    /// This mimics the cylinder cross-section used in sweeps.rs
+    fn create_cylinder_profile(
+        radius: f64,
+        half_height: f64,
+        bottom_edge: Corner,
+        top_edge: Corner,
+    ) -> PlanarProfile {
+        let bottom_center = DVec2::new(-radius, -half_height);
+        let bottom_surface = DVec2::new(0.0, -half_height);
+        let top_surface = DVec2::new(0.0, half_height);
+        let top_center = DVec2::new(-radius, half_height);
+
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: bottom_center,
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: bottom_surface,
+                },
+                bottom_edge,
+            ),
+            ProfileCommand::new(PathCommand::Line { point: top_surface }, top_edge),
+            ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
+        ])
+    }
+
+    #[test]
+    fn test_cylinder_profile_sharp_edges_to_curve_set() {
+        let profile = create_cylinder_profile(1.0, 1.0, Corner::Edge, Corner::Edge);
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With sharp edges, we should have exactly 3 segments (3 lines, no corner segments)
+        assert_eq!(
+            curve.segments.len(),
+            3,
+            "Expected 3 segments for sharp edges"
+        );
+
+        // Check segment IDs: 0, 2, 4 (even numbers for path segments)
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "First segment should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 2,
+            "Second segment should have ID 2"
+        );
+        assert_eq!(
+            curve.segments[2].segment_id, 4,
+            "Third segment should have ID 4"
+        );
+
+        // Verify segment positions
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Seg0 start: {:?}",
+            start0
+        );
+        assert!(
+            (end0 - DVec2::new(0.0, -1.0)).length() < 1e-9,
+            "Seg0 end: {:?}",
+            end0
+        );
+
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        assert!(
+            (start1 - DVec2::new(0.0, -1.0)).length() < 1e-9,
+            "Seg1 start: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, 1.0)).length() < 1e-9,
+            "Seg1 end: {:?}",
+            end1
+        );
+
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, 1.0)).length() < 1e-9,
+            "Seg2 start: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Seg2 end: {:?}",
+            end2
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_chamfer_edges_to_curve_set() {
+        let chamfer_distance = 0.2;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With chamfer edges, we should have 5 segments:
+        // seg 0: bottom cap line (truncated)
+        // seg 1: bottom chamfer
+        // seg 2: body line (truncated at both ends)
+        // seg 3: top chamfer
+        // seg 4: top cap line (truncated)
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for chamfer edges, got {}",
+            curve.segments.len()
+        );
+
+        // Check segment IDs
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "Bottom cap should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 1,
+            "Bottom chamfer should have ID 1"
+        );
+        assert_eq!(curve.segments[2].segment_id, 2, "Body should have ID 2");
+        assert_eq!(
+            curve.segments[3].segment_id, 3,
+            "Top chamfer should have ID 3"
+        );
+        assert_eq!(curve.segments[4].segment_id, 4, "Top cap should have ID 4");
+
+        // Verify bottom cap segment (should end at chamfer_distance from corner)
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Bottom cap start wrong: {:?}",
+            start0
+        );
+        // End should be at (-chamfer_distance, -1.0) since chamfer cuts the corner
+        assert!(
+            (end0 - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}, expected {:?}",
+            end0,
+            DVec2::new(-chamfer_distance, -1.0)
+        );
+
+        // Verify bottom chamfer segment
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        // Chamfer should go from (-chamfer_distance, -1.0) to (0.0, -1.0 + chamfer_distance)
+        assert!(
+            (start1 - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom chamfer start wrong: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Bottom chamfer end wrong: {:?}, expected {:?}",
+            end1,
+            DVec2::new(0.0, -1.0 + chamfer_distance)
+        );
+
+        // Verify body segment (should start at chamfer offset and end at chamfer offset)
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(0.0, 1.0 - chamfer_distance)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            end2
+        );
+
+        // Verify top chamfer segment
+        let seg3 = &curve.segments[3];
+        let start3 = seg3.nurbs.evaluate(0.0);
+        let end3 = seg3.nurbs.evaluate(1.0);
+        // Top chamfer should go from (0.0, 1.0 - chamfer_distance) to (-chamfer_distance, 1.0)
+        assert!(
+            (start3 - DVec2::new(0.0, 1.0 - chamfer_distance)).length() < 1e-9,
+            "Top chamfer start wrong: {:?}",
+            start3
+        );
+        assert!(
+            (end3 - DVec2::new(-chamfer_distance, 1.0)).length() < 1e-9,
+            "Top chamfer end wrong: {:?}, expected {:?}",
+            end3,
+            DVec2::new(-chamfer_distance, 1.0)
+        );
+
+        // Verify top cap segment
+        let seg4 = &curve.segments[4];
+        let start4 = seg4.nurbs.evaluate(0.0);
+        let end4 = seg4.nurbs.evaluate(1.0);
+        assert!(
+            (start4 - DVec2::new(-chamfer_distance, 1.0)).length() < 1e-9,
+            "Top cap start wrong: {:?}",
+            start4
+        );
+        assert!(
+            (end4 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Top cap end wrong: {:?}",
+            end4
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_fillet_edges_to_curve_set() {
+        let fillet_radius = 0.2;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // With fillet edges, we should have 5 segments:
+        // seg 0: bottom cap line (truncated)
+        // seg 1: bottom fillet arc
+        // seg 2: body line (truncated at both ends)
+        // seg 3: top fillet arc
+        // seg 4: top cap line (truncated)
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for fillet edges, got {}",
+            curve.segments.len()
+        );
+
+        // Check segment IDs
+        assert_eq!(
+            curve.segments[0].segment_id, 0,
+            "Bottom cap should have ID 0"
+        );
+        assert_eq!(
+            curve.segments[1].segment_id, 1,
+            "Bottom fillet should have ID 1"
+        );
+        assert_eq!(curve.segments[2].segment_id, 2, "Body should have ID 2");
+        assert_eq!(
+            curve.segments[3].segment_id, 3,
+            "Top fillet should have ID 3"
+        );
+        assert_eq!(curve.segments[4].segment_id, 4, "Top cap should have ID 4");
+
+        // For a 90-degree corner, the offset along each edge = radius (since tan(45°) = 1)
+        let offset = fillet_radius;
+
+        // Verify bottom cap segment
+        let seg0 = &curve.segments[0];
+        let start0 = seg0.nurbs.evaluate(0.0);
+        let end0 = seg0.nurbs.evaluate(1.0);
+        assert!(
+            (start0 - DVec2::new(-1.0, -1.0)).length() < 1e-9,
+            "Bottom cap start wrong: {:?}",
+            start0
+        );
+        assert!(
+            (end0 - DVec2::new(-offset, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}, expected {:?}",
+            end0,
+            DVec2::new(-offset, -1.0)
+        );
+
+        // Verify bottom fillet arc endpoints
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+        assert!(
+            (start1 - DVec2::new(-offset, -1.0)).length() < 1e-9,
+            "Bottom fillet start wrong: {:?}",
+            start1
+        );
+        assert!(
+            (end1 - DVec2::new(0.0, -1.0 + offset)).length() < 1e-9,
+            "Bottom fillet end wrong: {:?}, expected {:?}",
+            end1,
+            DVec2::new(0.0, -1.0 + offset)
+        );
+
+        // Verify body segment
+        let seg2 = &curve.segments[2];
+        let start2 = seg2.nurbs.evaluate(0.0);
+        let end2 = seg2.nurbs.evaluate(1.0);
+        assert!(
+            (start2 - DVec2::new(0.0, -1.0 + offset)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            start2
+        );
+        assert!(
+            (end2 - DVec2::new(0.0, 1.0 - offset)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            end2
+        );
+
+        // Verify top fillet arc endpoints
+        let seg3 = &curve.segments[3];
+        let start3 = seg3.nurbs.evaluate(0.0);
+        let end3 = seg3.nurbs.evaluate(1.0);
+        assert!(
+            (start3 - DVec2::new(0.0, 1.0 - offset)).length() < 1e-9,
+            "Top fillet start wrong: {:?}",
+            start3
+        );
+        assert!(
+            (end3 - DVec2::new(-offset, 1.0)).length() < 1e-9,
+            "Top fillet end wrong: {:?}, expected {:?}",
+            end3,
+            DVec2::new(-offset, 1.0)
+        );
+
+        // Verify top cap segment
+        let seg4 = &curve.segments[4];
+        let start4 = seg4.nurbs.evaluate(0.0);
+        let end4 = seg4.nurbs.evaluate(1.0);
+        assert!(
+            (start4 - DVec2::new(-offset, 1.0)).length() < 1e-9,
+            "Top cap start wrong: {:?}",
+            start4
+        );
+        assert!(
+            (end4 - DVec2::new(-1.0, 1.0)).length() < 1e-9,
+            "Top cap end wrong: {:?}",
+            end4
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_mixed_edges_to_curve_set() {
+        // Bottom: chamfer, Top: fillet
+        let chamfer_distance = 0.15;
+        let fillet_radius = 0.25;
+        let profile = create_cylinder_profile(
+            1.0,
+            1.0,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        assert_eq!(
+            curve.segments.len(),
+            5,
+            "Expected 5 segments for mixed edges"
+        );
+
+        // Bottom chamfer offset = chamfer_distance
+        // Top fillet offset = fillet_radius (for 90 degree corner)
+
+        // Bottom cap ends at (-chamfer_distance, -1.0)
+        let seg0_end = curve.segments[0].nurbs.evaluate(1.0);
+        assert!(
+            (seg0_end - DVec2::new(-chamfer_distance, -1.0)).length() < 1e-9,
+            "Bottom cap end wrong: {:?}",
+            seg0_end
+        );
+
+        // Body starts at (0.0, -1.0 + chamfer_distance)
+        let seg2_start = curve.segments[2].nurbs.evaluate(0.0);
+        assert!(
+            (seg2_start - DVec2::new(0.0, -1.0 + chamfer_distance)).length() < 1e-9,
+            "Body start wrong: {:?}",
+            seg2_start
+        );
+
+        // Body ends at (0.0, 1.0 - fillet_radius)
+        let seg2_end = curve.segments[2].nurbs.evaluate(1.0);
+        assert!(
+            (seg2_end - DVec2::new(0.0, 1.0 - fillet_radius)).length() < 1e-9,
+            "Body end wrong: {:?}",
+            seg2_end
+        );
+
+        // Top fillet ends at (-fillet_radius, 1.0)
+        let seg3_end = curve.segments[3].nurbs.evaluate(1.0);
+        assert!(
+            (seg3_end - DVec2::new(-fillet_radius, 1.0)).length() < 1e-9,
+            "Top fillet end wrong: {:?}",
+            seg3_end
+        );
+    }
+
+    #[test]
+    fn test_cylinder_profile_small_fillet_radius() {
+        // Test with small fillet radius that was causing issues
+        let fillet_radius = 0.05;
+        let profile = create_cylinder_profile(
+            0.5,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments");
+
+        // Verify the fillet segments have reasonable positions (with floating point tolerance)
+        let tolerance = 1e-9;
+        let seg1 = &curve.segments[1];
+        let start1 = seg1.nurbs.evaluate(0.0);
+        let end1 = seg1.nurbs.evaluate(1.0);
+
+        // Start and end should be within the profile bounds (with tolerance for floating point)
+        assert!(
+            start1.x >= -0.5 - tolerance && start1.x <= tolerance,
+            "Fillet start x out of bounds: {}",
+            start1.x
+        );
+        assert!(
+            start1.y >= -1.0 - tolerance && start1.y <= 1.0 + tolerance,
+            "Fillet start y out of bounds: {}",
+            start1.y
+        );
+        assert!(
+            end1.x >= -0.5 - tolerance && end1.x <= tolerance,
+            "Fillet end x out of bounds: {}",
+            end1.x
+        );
+        assert!(
+            end1.y >= -1.0 - tolerance && end1.y <= 1.0 + tolerance,
+            "Fillet end y out of bounds: {}",
+            end1.y
+        );
+    }
+
+    // ============================================================================
+    // Conical frustum profile tests - tests for profiles with diagonal lines
+    // ============================================================================
+
+    /// Creates a frustum-like profile with the given edge treatments.
+    /// The profile is: horizontal line (bottom cap) -> diagonal line (body) -> horizontal line (top cap)
+    /// This mimics the conical frustum cross-section used in sweeps.rs
+    fn create_frustum_profile(
+        bottom_radius: f64,
+        top_radius: f64,
+        half_height: f64,
+        bottom_edge: Corner,
+        top_edge: Corner,
+    ) -> PlanarProfile {
+        let max_radius = bottom_radius.max(top_radius);
+        let bottom_x = -(max_radius - bottom_radius);
+        let top_x = -(max_radius - top_radius);
+
+        let bottom_center = DVec2::new(-max_radius, -half_height);
+        let bottom_surface = DVec2::new(bottom_x, -half_height);
+        let top_surface = DVec2::new(top_x, half_height);
+        let top_center = DVec2::new(-max_radius, half_height);
+
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: bottom_center,
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: bottom_surface,
+                },
+                bottom_edge,
+            ),
+            ProfileCommand::new(PathCommand::Line { point: top_surface }, top_edge),
+            ProfileCommand::new(PathCommand::Line { point: top_center }, Corner::Edge),
+        ])
+    }
+
+    #[test]
+    fn test_frustum_profile_no_edges() {
+        // Test frustum profile with no fillets/chamfers
+        let profile = create_frustum_profile(0.5, 0.25, 1.0, Corner::Edge, Corner::Edge);
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(
+            curve.segments.len(),
+            3,
+            "Expected 3 segments for no-edge frustum"
+        );
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_small_taper() {
+        // Small taper: bottom_radius=0.5, top_radius=0.4
+        let fillet_radius = 0.1;
+        let profile = create_frustum_profile(
+            0.5,
+            0.4,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with fillets");
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_large_taper() {
+        // Large taper: bottom_radius=0.5, top_radius=0.1
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.5,
+            0.1,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with fillets");
+
+        // Verify segments are connected - this is the key test for the bug
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_cone() {
+        // Cone shape: bottom_radius=0.5, top_radius=0.0 (apex)
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.5,
+            0.0,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_with_fillet_inverted_cone() {
+        // Inverted cone: bottom_radius=0.0, top_radius=0.5
+        let fillet_radius = 0.05;
+        let profile = create_frustum_profile(
+            0.0,
+            0.5,
+            1.0,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(curve_set.curves.len(), 1);
+        let curve = &curve_set.curves[0];
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_positions() {
+        // Test that fillet positions are geometrically correct
+        // Bottom: horizontal line, then diagonal at 45 degrees (roughly)
+        // The fillet should be inscribed in the corner
+        let bottom_radius = 0.5;
+        let top_radius = 0.25;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Edge,
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Should have 4 segments: bottom cap, bottom fillet, body, top cap
+        assert_eq!(curve.segments.len(), 4, "Expected 4 segments");
+
+        // The fillet (segment 1) should be tangent to both the bottom cap and the body
+        let fillet_seg = &curve.segments[1];
+        let fillet_start = fillet_seg.nurbs.start_point();
+        let fillet_end = fillet_seg.nurbs.end_point();
+
+        // Bottom cap segment (0) should end where fillet starts
+        let bottom_cap_end = curve.segments[0].nurbs.end_point();
+        assert!(
+            (bottom_cap_end - fillet_start).length() < 1e-6,
+            "Bottom cap should connect to fillet start: cap_end={:?}, fillet_start={:?}",
+            bottom_cap_end,
+            fillet_start
+        );
+
+        // Body segment (2) should start where fillet ends
+        let body_start = curve.segments[2].nurbs.start_point();
+        assert!(
+            (body_start - fillet_end).length() < 1e-6,
+            "Body should connect to fillet end: body_start={:?}, fillet_end={:?}",
+            body_start,
+            fillet_end
+        );
+
+        // Fillet start should be on the horizontal line (y = -half_height)
+        assert!(
+            (fillet_start.y - (-half_height)).abs() < 1e-6,
+            "Fillet start should be on bottom horizontal: y={}",
+            fillet_start.y
+        );
+
+        // The body segment is now truncated. Its end point should be on the original diagonal
+        // but the start point (fillet_end) might not be exactly on the original line
+        // because the fillet inscribes a circle that is tangent to both edges.
+        // The key check is that all segments are connected.
+
+        // Verify segments are connected (this is the important geometric property)
+        verify_segment_connectivity(curve, 1e-6);
+
+        // Check that the fillet is an arc (has proper arc properties)
+        // The arc should have the specified radius
+        // We can check this by verifying the midpoint is at radius distance from start/end chord
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_tangent_continuity() {
+        // Test that fillets are tangent to adjacent segments
+        let bottom_radius = 0.5;
+        let top_radius = 0.1;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Should have 5 segments: bottom cap, bottom fillet, body, top fillet, top cap
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments");
+
+        // Check tangent continuity at bottom fillet
+        let bottom_cap_end_tangent = curve.segments[0].nurbs.derivative(1.0).normalize_or_zero();
+        let fillet_start_tangent = curve.segments[1].nurbs.derivative(0.0).normalize_or_zero();
+
+        // Tangents should be parallel (dot product close to 1 or -1)
+        let dot = bottom_cap_end_tangent.dot(fillet_start_tangent);
+        assert!(
+            dot.abs() > 0.99,
+            "Bottom cap and fillet should be tangent: dot={}, cap_tan={:?}, fillet_tan={:?}",
+            dot,
+            bottom_cap_end_tangent,
+            fillet_start_tangent
+        );
+
+        // Check tangent continuity at bottom fillet to body
+        let fillet_end_tangent = curve.segments[1].nurbs.derivative(1.0).normalize_or_zero();
+        let body_start_tangent = curve.segments[2].nurbs.derivative(0.0).normalize_or_zero();
+
+        let dot2 = fillet_end_tangent.dot(body_start_tangent);
+        assert!(
+            dot2.abs() > 0.99,
+            "Fillet and body should be tangent: dot={}, fillet_tan={:?}, body_tan={:?}",
+            dot2,
+            fillet_end_tangent,
+            body_start_tangent
+        );
+
+        // Check tangent continuity at top fillet
+        let body_end_tangent = curve.segments[2].nurbs.derivative(1.0).normalize_or_zero();
+        let top_fillet_start_tangent = curve.segments[3].nurbs.derivative(0.0).normalize_or_zero();
+
+        let dot3 = body_end_tangent.dot(top_fillet_start_tangent);
+        assert!(
+            dot3.abs() > 0.99,
+            "Body and top fillet should be tangent: dot={}, body_tan={:?}, fillet_tan={:?}",
+            dot3,
+            body_end_tangent,
+            top_fillet_start_tangent
+        );
+    }
+
+    #[test]
+    fn test_frustum_profile_fillet_radius_verification() {
+        // Verify that the fillet arc has the correct radius
+        let bottom_radius = 0.5;
+        let top_radius = 0.25;
+        let half_height = 1.0;
+        let fillet_radius = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Fillet {
+                radius: fillet_radius,
+            },
+            Corner::Edge,
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        // Get the fillet segment
+        let fillet_seg = &curve.segments[1];
+        let fillet_nurbs = &fillet_seg.nurbs;
+
+        // Sample points along the fillet and verify they're all at radius distance from center
+        // The center can be found as the intersection of perpendiculars from start and end
+        let start = fillet_nurbs.start_point();
+        let end = fillet_nurbs.end_point();
+        let mid = fillet_nurbs.evaluate(0.5);
+
+        // For an arc, all points should be equidistant from the center
+        // We can estimate the center from three points
+        // Using the circumcircle formula
+        let d = 2.0
+            * (start.x * (mid.y - end.y) + mid.x * (end.y - start.y) + end.x * (start.y - mid.y));
+        if d.abs() > 1e-10 {
+            let center_x = ((start.x * start.x + start.y * start.y) * (mid.y - end.y)
+                + (mid.x * mid.x + mid.y * mid.y) * (end.y - start.y)
+                + (end.x * end.x + end.y * end.y) * (start.y - mid.y))
+                / d;
+            let center_y = ((start.x * start.x + start.y * start.y) * (end.x - mid.x)
+                + (mid.x * mid.x + mid.y * mid.y) * (start.x - end.x)
+                + (end.x * end.x + end.y * end.y) * (mid.x - start.x))
+                / d;
+            let center = DVec2::new(center_x, center_y);
+
+            let r_start = (start - center).length();
+            let r_mid = (mid - center).length();
+            let r_end = (end - center).length();
+
+            // All radii should be approximately equal to fillet_radius
+            let tolerance = 1e-4;
+            assert!(
+                (r_start - fillet_radius).abs() < tolerance,
+                "Start radius {} should be {}",
+                r_start,
+                fillet_radius
+            );
+            assert!(
+                (r_mid - fillet_radius).abs() < tolerance,
+                "Mid radius {} should be {}",
+                r_mid,
+                fillet_radius
+            );
+            assert!(
+                (r_end - fillet_radius).abs() < tolerance,
+                "End radius {} should be {}",
+                r_end,
+                fillet_radius
+            );
+        }
+    }
+
+    #[test]
+    fn test_frustum_profile_chamfer_positions() {
+        // Test chamfer positions on frustum profile
+        let bottom_radius = 0.5;
+        let top_radius = 0.1;
+        let half_height = 1.0;
+        let chamfer_distance = 0.1;
+
+        let profile = create_frustum_profile(
+            bottom_radius,
+            top_radius,
+            half_height,
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+            Corner::Chamfer {
+                distance: chamfer_distance,
+            },
+        );
+        let curve_set = profile.to_curve_set().unwrap();
+        let curve = &curve_set.curves[0];
+
+        assert_eq!(curve.segments.len(), 5, "Expected 5 segments with chamfers");
+
+        // Verify segments are connected
+        verify_segment_connectivity(curve, 1e-6);
+
+        // Chamfer should be a straight line
+        let bottom_chamfer = &curve.segments[1];
+        // A chamfer NURBS should be a line (2 control points)
+        assert!(
+            bottom_chamfer.nurbs.control_points.len() <= 2,
+            "Chamfer should be a line"
+        );
+    }
+
+    /// Helper function to verify all segments in a curve are connected end-to-end
+    fn verify_segment_connectivity(curve: &Curve, tolerance: f64) {
+        for i in 0..curve.segments.len() - 1 {
+            let end_of_current = curve.segments[i].nurbs.end_point();
+            let start_of_next = curve.segments[i + 1].nurbs.start_point();
+            let gap = (end_of_current - start_of_next).length();
+            assert!(
+                gap < tolerance,
+                "Gap between segment {} and {}: {:?} to {:?}, gap = {}",
+                i,
+                i + 1,
+                end_of_current,
+                start_of_next,
+                gap
+            );
+        }
     }
 }

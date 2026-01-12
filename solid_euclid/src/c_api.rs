@@ -4,6 +4,7 @@ use std::os::raw::c_char;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model as PlatonicSolidModel;
 use crate::sphere::Model as SphereModel;
+use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
 use crate::triangular_mesh::TriangularMesh;
 
 /// Returns a C-compatible string with the hello message.
@@ -305,6 +306,287 @@ pub extern "C" fn get_sphere_types_c() -> *mut c_char {
     match CString::new(types) {
         Ok(c_string) => c_string.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// =============================================================================
+// Torus C API
+// =============================================================================
+
+/// Creates a triangular mesh for a Torus from a JSON string.
+///
+/// # Arguments
+/// * `torus_json` - A null-terminated JSON string representing the torus.
+///
+/// # Example JSON
+/// ```json
+/// {
+///   "major_radius": 2.0,
+///   "minor_radius": 0.5,
+///   "major_segments": 36,
+///   "minor_segments": 18,
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_torus_c(torus_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if torus_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(torus_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let torus: Torus = match serde_json::from_str(json_str) {
+            Ok(t) => t,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match torus.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
+    }
+}
+
+// =============================================================================
+// Capsule C API
+// =============================================================================
+
+/// Creates a triangular mesh for a Capsule from a JSON string.
+///
+/// A capsule is a cylinder with hemispheres at both ends. It supports 3 material regions:
+/// - Face 0: Bottom hemisphere
+/// - Face 1: Cylindrical body
+/// - Face 2: Top hemisphere
+///
+/// # Arguments
+/// * `capsule_json` - A null-terminated JSON string representing the capsule.
+///
+/// # Example JSON
+/// ```json
+/// {
+///   "radius": 0.5,
+///   "height": 2.0,
+///   "segments": 24,
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// Or with 3 materials:
+/// ```json
+/// {
+///   "radius": 0.5,
+///   "height": 2.0,
+///   "segments": 24,
+///   "material": { "Array": ["bottom", "body", "top"] }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_capsule_c(capsule_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if capsule_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(capsule_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let capsule: Capsule = match serde_json::from_str(json_str) {
+            Ok(c) => c,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match capsule.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
+    }
+}
+
+// =============================================================================
+// Cylinder C API
+// =============================================================================
+
+/// Creates a triangular mesh for a Cylinder from a JSON string.
+///
+/// A cylinder supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Cylindrical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Arguments
+/// * `cylinder_json` - A null-terminated JSON string representing the cylinder.
+///
+/// # Example JSON (sharp edges)
+/// ```json
+/// {
+///   "radius": 0.5,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": "Edge",
+///   "top_edge": "Edge",
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Example JSON (chamfered edges)
+/// ```json
+/// {
+///   "radius": 0.5,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": { "Chamfer": { "distance": 0.1 } },
+///   "top_edge": { "Chamfer": { "distance": 0.1 } },
+///   "material": { "Array": ["bottom_cap", "bottom_edge", "body", "top_edge", "top_cap"] }
+/// }
+/// ```
+///
+/// # Example JSON (filleted edges)
+/// ```json
+/// {
+///   "radius": 0.5,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": { "Fillet": { "radius": 0.1 } },
+///   "top_edge": { "Fillet": { "radius": 0.1 } },
+///   "material": { "Uniform": "metal" }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_cylinder_c(cylinder_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if cylinder_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(cylinder_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let cylinder: Cylinder = match serde_json::from_str(json_str) {
+            Ok(c) => c,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match cylinder.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
+    }
+}
+
+// =============================================================================
+// Conical Frustum C API
+// =============================================================================
+
+/// Creates a triangular mesh for a Conical Frustum (truncated cone) from a JSON string.
+///
+/// A conical frustum supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Conical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Arguments
+/// * `frustum_json` - A null-terminated JSON string representing the frustum.
+///
+/// # Example JSON (sharp edges)
+/// ```json
+/// {
+///   "bottom_radius": 0.5,
+///   "top_radius": 0.25,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": "Edge",
+///   "top_edge": "Edge",
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Example JSON (chamfered edges)
+/// ```json
+/// {
+///   "bottom_radius": 0.5,
+///   "top_radius": 0.25,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": { "Chamfer": { "distance": 0.1 } },
+///   "top_edge": { "Chamfer": { "distance": 0.1 } },
+///   "material": { "Array": ["bottom_cap", "bottom_edge", "body", "top_edge", "top_cap"] }
+/// }
+/// ```
+///
+/// # Example JSON (cone with top_radius = 0)
+/// ```json
+/// {
+///   "bottom_radius": 0.5,
+///   "top_radius": 0.0,
+///   "height": 2.0,
+///   "segments": 24,
+///   "bottom_edge": "Edge",
+///   "top_edge": "Edge",
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_conical_frustum_c(frustum_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if frustum_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(frustum_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let frustum: ConicalFrustum = match serde_json::from_str(json_str) {
+            Ok(f) => f,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match frustum.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
     }
 }
 
@@ -909,5 +1191,636 @@ mod tests {
         assert_eq!(mesh.entries_len, 2); // "base" and "special"
 
         unsafe { triangular_mesh_free(mesh) };
+    }
+
+    // =============================================================================
+    // Torus C API Tests
+    // =============================================================================
+
+    #[test]
+    fn test_create_torus_c_uniform() {
+        let json = CString::new(
+            r#"{"major_radius":2.0,"minor_radius":0.5,"major_segments":36,"minor_segments":18,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_torus_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert!(geom.vertices_len > 0);
+            assert!(geom.indices_len > 0);
+            // Torus generates triangles based on segments
+            assert!(geom.indices_len / 3 > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_torus_c_null_json() {
+        let mesh = unsafe { create_torus_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_torus_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_torus_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_torus_c_geometry_data_consistent() {
+        let json = CString::new(
+            r#"{"major_radius":2.0,"minor_radius":0.5,"major_segments":24,"minor_segments":12,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_torus_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+
+            // vertices and normals should have same length (3 components each)
+            assert_eq!(geom.vertices_len, geom.normals_len);
+            // uvs should have 2/3 the length of vertices (2 components vs 3)
+            assert_eq!(geom.uvs_len * 3, geom.vertices_len * 2);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_torus_c_normals_normalized() {
+        let json = CString::new(
+            r#"{"major_radius":2.0,"minor_radius":0.5,"major_segments":16,"minor_segments":8,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_torus_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+
+            for i in (0..normals.len()).step_by(3) {
+                let nx = normals[i];
+                let ny = normals[i + 1];
+                let nz = normals[i + 2];
+                let length = (nx * nx + ny * ny + nz * nz).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized: length = {}",
+                    length
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_torus_c_indices_within_bounds() {
+        let json = CString::new(
+            r#"{"major_radius":2.0,"minor_radius":0.5,"major_segments":16,"minor_segments":8,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_torus_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    // =============================================================================
+    // Capsule C API Tests
+    // =============================================================================
+
+    #[test]
+    fn test_create_capsule_c_uniform() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert!(geom.vertices_len > 0);
+            assert!(geom.indices_len > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_c_array_3_materials() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"material":{"Array":["bottom","body","top"]}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 3); // 3 different materials
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_capsule_c_null_json() {
+        let mesh = unsafe { create_capsule_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_capsule_c_geometry_data_consistent() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+
+            assert_eq!(geom.vertices_len, geom.normals_len);
+            assert_eq!(geom.uvs_len * 3, geom.vertices_len * 2);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_capsule_c_normals_normalized() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+
+            for i in (0..normals.len()).step_by(3) {
+                let nx = normals[i];
+                let ny = normals[i + 1];
+                let nz = normals[i + 2];
+                let length = (nx * nx + ny * ny + nz * nz).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized: length = {}",
+                    length
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_capsule_c_indices_within_bounds() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_capsule_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    // =============================================================================
+    // Cylinder C API Tests
+    // =============================================================================
+
+    #[test]
+    fn test_create_cylinder_c_uniform_edge() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert!(geom.vertices_len > 0);
+            assert!(geom.indices_len > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_cylinder_c_chamfered() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_cylinder_c_filleted() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Fillet":{"radius":0.1}},"top_edge":{"Fillet":{"radius":0.1}},"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_cylinder_c_array_5_materials() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.1}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 5); // 5 different materials
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_cylinder_c_null_json() {
+        let mesh = unsafe { create_cylinder_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_cylinder_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_cylinder_c_geometry_data_consistent() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+
+            assert_eq!(geom.vertices_len, geom.normals_len);
+            assert_eq!(geom.uvs_len * 3, geom.vertices_len * 2);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_cylinder_c_normals_normalized() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+
+            for i in (0..normals.len()).step_by(3) {
+                let nx = normals[i];
+                let ny = normals[i + 1];
+                let nz = normals[i + 2];
+                let length = (nx * nx + ny * ny + nz * nz).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized: length = {}",
+                    length
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_cylinder_c_indices_within_bounds() {
+        let json = CString::new(
+            r#"{"radius":0.5,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_cylinder_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    // =============================================================================
+    // Conical Frustum C API Tests
+    // =============================================================================
+
+    #[test]
+    fn test_create_conical_frustum_c_uniform_edge() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert!(geom.vertices_len > 0);
+            assert!(geom.indices_len > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_conical_frustum_c_chamfered() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_conical_frustum_c_cone() {
+        // Cone with top_radius = 0
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.0,"height":2.0,"segments":24,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_conical_frustum_c_array_5_materials() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":24,"bottom_edge":{"Chamfer":{"distance":0.1}},"top_edge":{"Chamfer":{"distance":0.05}},"material":{"Array":["bottom_cap","bottom_edge","body","top_edge","top_cap"]}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 5); // 5 different materials
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_conical_frustum_c_null_json() {
+        let mesh = unsafe { create_conical_frustum_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_conical_frustum_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_conical_frustum_c_geometry_data_consistent() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+
+            assert_eq!(geom.vertices_len, geom.normals_len);
+            assert_eq!(geom.uvs_len * 3, geom.vertices_len * 2);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_conical_frustum_c_normals_normalized() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+
+            for i in (0..normals.len()).step_by(3) {
+                let nx = normals[i];
+                let ny = normals[i + 1];
+                let nz = normals[i + 2];
+                let length = (nx * nx + ny * ny + nz * nz).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized: length = {}",
+                    length
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_conical_frustum_c_indices_within_bounds() {
+        let json = CString::new(
+            r#"{"bottom_radius":0.5,"top_radius":0.25,"height":2.0,"segments":16,"bottom_edge":"Edge","top_edge":"Edge","material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_conical_frustum_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
     }
 }

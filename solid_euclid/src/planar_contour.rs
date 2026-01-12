@@ -10,16 +10,23 @@ pub struct Point {
     pub position: DVec2,
     /// The tangent vector at this point.
     pub tangent: DVec2,
+    /// The distance along the curved contour from the start of the contour to this point.
+    pub distance: f64,
 }
 
 impl Point {
-    /// Creates a new point with the specified position and tangent.
+    /// Creates a new point with the specified position, tangent, and distance.
     ///
     /// # Arguments
     /// * `position` - The 2D position of the point
     /// * `tangent` - The tangent vector at this point
-    pub fn new(position: DVec2, tangent: DVec2) -> Self {
-        Self { position, tangent }
+    /// * `distance` - The distance along the contour from the start to this point
+    pub fn new(position: DVec2, tangent: DVec2, distance: f64) -> Self {
+        Self {
+            position,
+            tangent,
+            distance,
+        }
     }
 }
 
@@ -35,6 +42,8 @@ pub struct Segment {
     pub end: Point,
     /// The segment identifier.
     pub segment: u32,
+    /// Whether the transition from start to end is smooth (tangent continuous).
+    pub smooth_end: bool,
 }
 
 impl Segment {
@@ -44,11 +53,13 @@ impl Segment {
     /// * `start` - The starting point of the segment
     /// * `end` - The ending point of the segment
     /// * `segment` - The segment identifier
-    pub fn new(start: Point, end: Point, segment: u32) -> Self {
+    /// * `smooth_end` - Whether the transition from start to end is smooth
+    pub fn new(start: Point, end: Point, segment: u32, smooth_end: bool) -> Self {
         Self {
             start,
             end,
             segment,
+            smooth_end,
         }
     }
 }
@@ -230,16 +241,18 @@ mod tests {
     fn test_point_creation() {
         let position = DVec2::new(1.0, 2.0);
         let tangent = DVec2::new(1.0, 0.0);
+        let distance = 5.0;
 
-        let point = Point::new(position, tangent);
+        let point = Point::new(position, tangent, distance);
 
         assert_eq!(point.position, position);
         assert_eq!(point.tangent, tangent);
+        assert_eq!(point.distance, distance);
     }
 
     #[test]
     fn test_point_clone() {
-        let point1 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0));
+        let point1 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0), 3.5);
         let point2 = point1.clone();
 
         assert_eq!(point1, point2);
@@ -247,34 +260,38 @@ mod tests {
 
     #[test]
     fn test_point_equality() {
-        let point1 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0));
-        let point2 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0));
-        let point3 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(0.0, 1.0));
+        let point1 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0), 1.0);
+        let point2 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0), 1.0);
+        let point3 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(0.0, 1.0), 1.0);
+        let point4 = Point::new(DVec2::new(1.0, 2.0), DVec2::new(1.0, 0.0), 2.0);
 
         assert_eq!(point1, point2);
         assert_ne!(point1, point3);
+        assert_ne!(point1, point4); // Different distance
     }
 
     // Segment tests
 
     #[test]
     fn test_segment_creation() {
-        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0));
-        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0));
+        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0);
+        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0);
         let segment_id = 5;
+        let smooth_end = true;
 
-        let segment = Segment::new(start.clone(), end.clone(), segment_id);
+        let segment = Segment::new(start.clone(), end.clone(), segment_id, smooth_end);
 
         assert_eq!(segment.start, start);
         assert_eq!(segment.end, end);
         assert_eq!(segment.segment, segment_id);
+        assert_eq!(segment.smooth_end, smooth_end);
     }
 
     #[test]
     fn test_segment_clone() {
-        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0));
-        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0));
-        let segment1 = Segment::new(start, end, 1);
+        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0);
+        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0);
+        let segment1 = Segment::new(start, end, 1, true);
         let segment2 = segment1.clone();
 
         assert_eq!(segment1, segment2);
@@ -282,15 +299,17 @@ mod tests {
 
     #[test]
     fn test_segment_equality() {
-        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0));
-        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0));
+        let start = Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0);
+        let end = Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0);
 
-        let segment1 = Segment::new(start.clone(), end.clone(), 1);
-        let segment2 = Segment::new(start.clone(), end.clone(), 1);
-        let segment3 = Segment::new(start.clone(), end.clone(), 2);
+        let segment1 = Segment::new(start.clone(), end.clone(), 1, true);
+        let segment2 = Segment::new(start.clone(), end.clone(), 1, true);
+        let segment3 = Segment::new(start.clone(), end.clone(), 2, true);
+        let segment4 = Segment::new(start.clone(), end.clone(), 1, false);
 
         assert_eq!(segment1, segment2);
         assert_ne!(segment1, segment3);
+        assert_ne!(segment1, segment4); // Different smooth_end
     }
 
     // Contour tests
@@ -306,14 +325,16 @@ mod tests {
     fn test_contour_add_segment() {
         let mut contour = Contour::new();
         let segment1 = Segment::new(
-            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
             0,
+            true,
         );
         let segment2 = Segment::new(
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0)),
-            Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0)),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0), 1.0),
+            Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0), 2.0),
             1,
+            false,
         );
 
         contour.add_segment(segment1);
@@ -327,19 +348,22 @@ mod tests {
     fn test_contour_with_segments() {
         let segments = vec![
             Segment::new(
-                Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-                Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+                Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+                Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
                 0,
+                true,
             ),
             Segment::new(
-                Point::new(DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0)),
-                Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0)),
+                Point::new(DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0), 1.0),
+                Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0), 2.0),
                 1,
+                true,
             ),
             Segment::new(
-                Point::new(DVec2::new(1.0, 1.0), DVec2::new(-1.0, 0.0)),
-                Point::new(DVec2::new(0.0, 1.0), DVec2::new(-1.0, 0.0)),
+                Point::new(DVec2::new(1.0, 1.0), DVec2::new(-1.0, 0.0), 2.0),
+                Point::new(DVec2::new(0.0, 1.0), DVec2::new(-1.0, 0.0), 3.0),
                 2,
+                false,
             ),
         ];
 
@@ -359,9 +383,10 @@ mod tests {
             let t1 = i as f64 * 0.25;
             let t2 = (i + 1) as f64 * 0.25;
             let segment = Segment::new(
-                Point::new(DVec2::new(t1, t1 * t1), DVec2::new(1.0, 2.0 * t1)),
-                Point::new(DVec2::new(t2, t2 * t2), DVec2::new(1.0, 2.0 * t2)),
+                Point::new(DVec2::new(t1, t1 * t1), DVec2::new(1.0, 2.0 * t1), t1),
+                Point::new(DVec2::new(t2, t2 * t2), DVec2::new(1.0, 2.0 * t2), t2),
                 0, // All from segment 0
+                true,
             );
             contour.add_segment(segment);
         }
@@ -398,9 +423,10 @@ mod tests {
     #[test]
     fn test_contour_with_segments_closed() {
         let segments = vec![Segment::new(
-            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
             0,
+            true,
         )];
 
         let contour = Contour::with_segments_closed(segments.clone());
@@ -412,9 +438,10 @@ mod tests {
     #[test]
     fn test_contour_with_segments_and_closed() {
         let segments = vec![Segment::new(
-            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
             0,
+            true,
         )];
 
         let contour_open = Contour::with_segments_and_closed(segments.clone(), false);
@@ -429,9 +456,10 @@ mod tests {
     #[test]
     fn test_contour_closed_equality() {
         let segments = vec![Segment::new(
-            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
             0,
+            true,
         )];
 
         let contour1 = Contour::with_segments_and_closed(segments.clone(), true);
@@ -455,14 +483,16 @@ mod tests {
     fn test_contour_set_add_contour() {
         let mut contour_set = ContourSet::new();
         let contour1 = Contour::with_segments(vec![Segment::new(
-            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
             0,
+            true,
         )]);
         let contour2 = Contour::with_segments(vec![Segment::new(
-            Point::new(DVec2::new(2.0, 2.0), DVec2::new(1.0, 0.0)),
-            Point::new(DVec2::new(3.0, 2.0), DVec2::new(1.0, 0.0)),
+            Point::new(DVec2::new(2.0, 2.0), DVec2::new(1.0, 0.0), 0.0),
+            Point::new(DVec2::new(3.0, 2.0), DVec2::new(1.0, 0.0), 1.0),
             1,
+            false,
         )]);
 
         contour_set.add_contour(contour1);
@@ -476,14 +506,16 @@ mod tests {
     fn test_contour_set_with_contours() {
         let contours = vec![
             Contour::with_segments(vec![Segment::new(
-                Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0)),
-                Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0)),
+                Point::new(DVec2::new(0.0, 0.0), DVec2::new(1.0, 0.0), 0.0),
+                Point::new(DVec2::new(1.0, 0.0), DVec2::new(1.0, 0.0), 1.0),
                 0,
+                true,
             )]),
             Contour::with_segments(vec![Segment::new(
-                Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0)),
-                Point::new(DVec2::new(1.0, 2.0), DVec2::new(0.0, 1.0)),
+                Point::new(DVec2::new(1.0, 1.0), DVec2::new(0.0, 1.0), 0.0),
+                Point::new(DVec2::new(1.0, 2.0), DVec2::new(0.0, 1.0), 1.0),
                 1,
+                true,
             )]),
         ];
 
@@ -520,16 +552,24 @@ mod tests {
 
             // Bottom edge (segment 0)
             let bottom_samples = (self.width / sample_distance).ceil() as usize;
+            let mut current_distance = 0.0;
             for i in 0..bottom_samples {
                 let t1 = (i as f64) / bottom_samples as f64;
                 let t2 = ((i + 1) as f64) / bottom_samples as f64;
                 let x1 = t1 * self.width;
                 let x2 = t2 * self.width;
+                let segment_length = x2 - x1;
                 contour.add_segment(Segment::new(
-                    Point::new(DVec2::new(x1, 0.0), DVec2::new(1.0, 0.0)),
-                    Point::new(DVec2::new(x2, 0.0), DVec2::new(1.0, 0.0)),
+                    Point::new(DVec2::new(x1, 0.0), DVec2::new(1.0, 0.0), current_distance),
+                    Point::new(
+                        DVec2::new(x2, 0.0),
+                        DVec2::new(1.0, 0.0),
+                        current_distance + segment_length,
+                    ),
                     0,
+                    i < bottom_samples - 1, // smooth within segment, not at corner
                 ));
+                current_distance += segment_length;
             }
 
             // Right edge (segment 1)
@@ -539,11 +579,22 @@ mod tests {
                 let t2 = ((i + 1) as f64) / right_samples as f64;
                 let y1 = t1 * self.height;
                 let y2 = t2 * self.height;
+                let segment_length = y2 - y1;
                 contour.add_segment(Segment::new(
-                    Point::new(DVec2::new(self.width, y1), DVec2::new(0.0, 1.0)),
-                    Point::new(DVec2::new(self.width, y2), DVec2::new(0.0, 1.0)),
+                    Point::new(
+                        DVec2::new(self.width, y1),
+                        DVec2::new(0.0, 1.0),
+                        current_distance,
+                    ),
+                    Point::new(
+                        DVec2::new(self.width, y2),
+                        DVec2::new(0.0, 1.0),
+                        current_distance + segment_length,
+                    ),
                     1,
+                    i < right_samples - 1, // smooth within segment, not at corner
                 ));
+                current_distance += segment_length;
             }
 
             // Top edge (segment 2)
@@ -553,11 +604,22 @@ mod tests {
                 let t2 = ((i + 1) as f64) / top_samples as f64;
                 let x1 = self.width - t1 * self.width;
                 let x2 = self.width - t2 * self.width;
+                let segment_length = (x1 - x2).abs();
                 contour.add_segment(Segment::new(
-                    Point::new(DVec2::new(x1, self.height), DVec2::new(-1.0, 0.0)),
-                    Point::new(DVec2::new(x2, self.height), DVec2::new(-1.0, 0.0)),
+                    Point::new(
+                        DVec2::new(x1, self.height),
+                        DVec2::new(-1.0, 0.0),
+                        current_distance,
+                    ),
+                    Point::new(
+                        DVec2::new(x2, self.height),
+                        DVec2::new(-1.0, 0.0),
+                        current_distance + segment_length,
+                    ),
                     2,
+                    i < top_samples - 1, // smooth within segment, not at corner
                 ));
+                current_distance += segment_length;
             }
 
             // Left edge (segment 3)
@@ -567,11 +629,18 @@ mod tests {
                 let t2 = ((i + 1) as f64) / left_samples as f64;
                 let y1 = self.height - t1 * self.height;
                 let y2 = self.height - t2 * self.height;
+                let segment_length = (y1 - y2).abs();
                 contour.add_segment(Segment::new(
-                    Point::new(DVec2::new(0.0, y1), DVec2::new(0.0, -1.0)),
-                    Point::new(DVec2::new(0.0, y2), DVec2::new(0.0, -1.0)),
+                    Point::new(DVec2::new(0.0, y1), DVec2::new(0.0, -1.0), current_distance),
+                    Point::new(
+                        DVec2::new(0.0, y2),
+                        DVec2::new(0.0, -1.0),
+                        current_distance + segment_length,
+                    ),
                     3,
+                    i < left_samples - 1, // smooth within segment, not at corner
                 ));
+                current_distance += segment_length;
             }
 
             let mut contour_set = ContourSet::new();

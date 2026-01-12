@@ -21,6 +21,11 @@ async function main() {
               Sphere
             </a>
           </li>
+          <li style="margin: 10px 0;">
+            <a href="./sweeps/" style="color: #007acc; text-decoration: none; font-size: 18px;">
+              Sweeps
+            </a>
+          </li>
         </ul>
       </nav>
     </div>

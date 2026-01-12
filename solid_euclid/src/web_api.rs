@@ -3,6 +3,8 @@ use wasm_bindgen::prelude::*;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
+use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
+use crate::triangular_mesh::TriangularMesh;
 
 #[wasm_bindgen]
 pub fn hello_wasm() -> String {
@@ -103,6 +105,36 @@ impl WasmTriangularMesh {
     }
 }
 
+/// Converts a `TriangularMesh` into a `WasmTriangularMesh`.
+///
+/// This helper function handles the common conversion pattern used across
+/// all geometry creation functions, reducing code duplication.
+fn triangular_mesh_to_wasm(triangular_mesh: TriangularMesh) -> WasmTriangularMesh {
+    let mut material_ids = Vec::new();
+    let mut geometries = Vec::new();
+
+    // Sort material IDs to ensure consistent ordering
+    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+    sorted_materials.sort();
+
+    for material_id in sorted_materials {
+        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+            material_ids.push(material_id.clone());
+            geometries.push(WasmTriangularGeometry {
+                vertices: geometry.vertices.clone(),
+                normals: geometry.normals.clone(),
+                uvs: geometry.uvs.clone(),
+                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+            });
+        }
+    }
+
+    WasmTriangularMesh {
+        material_ids,
+        geometries,
+    }
+}
+
 /// Creates a triangular mesh for a Platonic solid model from a JavaScript object.
 ///
 /// # Arguments
@@ -135,29 +167,7 @@ pub fn create_platonic_solid(model: JsValue) -> Result<WasmTriangularMesh, JsErr
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Returns a list of available Platonic solid types.
@@ -203,29 +213,7 @@ pub fn create_sphere(model: JsValue) -> Result<WasmTriangularMesh, JsError> {
         .to_triangular_mesh()
         .map_err(|e| JsError::new(&format!("Failed to create sphere mesh: {:?}", e)))?;
 
-    let mut material_ids = Vec::new();
-    let mut geometries = Vec::new();
-
-    // Sort material IDs to ensure consistent ordering
-    let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-    sorted_materials.sort();
-
-    for material_id in sorted_materials {
-        if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-            material_ids.push(material_id.clone());
-            geometries.push(WasmTriangularGeometry {
-                vertices: geometry.vertices.clone(),
-                normals: geometry.normals.clone(),
-                uvs: geometry.uvs.clone(),
-                indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-            });
-        }
-    }
-
-    Ok(WasmTriangularMesh {
-        material_ids,
-        geometries,
-    })
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
 /// Returns a list of available Sphere types.
@@ -237,9 +225,226 @@ pub fn get_sphere_types() -> js_sys::Array {
     arr
 }
 
+/// Creates a triangular mesh for a Torus from a JavaScript object.
+///
+/// # Arguments
+/// * `torus` - A JavaScript object representing a `Torus` with the following fields:
+///   - `major_radius`: The distance from the center to the tube center (f64)
+///   - `minor_radius`: The radius of the tube (f64)
+///   - `major_segments`: Number of segments around the major circle (u32)
+///   - `minor_segments`: Number of segments around the minor circle (u32)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// const mesh = create_torus({
+///   major_radius: 2.0,
+///   minor_radius: 0.5,
+///   major_segments: 36,
+///   minor_segments: 18,
+///   material: { Uniform: "default" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_torus(torus: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let torus: Torus = serde_wasm_bindgen::from_value(torus)
+        .map_err(|e| JsError::new(&format!("Failed to parse torus: {}", e)))?;
+
+    let triangular_mesh = torus
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create torus mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
+/// Creates a triangular mesh for a Capsule from a JavaScript object.
+///
+/// A capsule is a cylinder with hemispheres at both ends. It supports 3 material regions:
+/// - Face 0: Bottom hemisphere
+/// - Face 1: Cylindrical body
+/// - Face 2: Top hemisphere
+///
+/// # Arguments
+/// * `capsule` - A JavaScript object representing a `Capsule` with the following fields:
+///   - `radius`: The radius of the cylinder and hemispheres (f64)
+///   - `height`: The length of the cylindrical body (f64)
+///   - `segments`: Number of segments for tessellation (u32)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Capsule with uniform material
+/// const mesh = create_capsule({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Capsule with 3 materials (bottom, body, top)
+/// const mesh = create_capsule({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   material: { Array: ["bottom", "body", "top"] }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_capsule(capsule: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let capsule: Capsule = serde_wasm_bindgen::from_value(capsule)
+        .map_err(|e| JsError::new(&format!("Failed to parse capsule: {}", e)))?;
+
+    let triangular_mesh = capsule
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create capsule mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
+/// Creates a triangular mesh for a Cylinder from a JavaScript object.
+///
+/// A cylinder supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Cylindrical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Arguments
+/// * `cylinder` - A JavaScript object representing a `Cylinder` with the following fields:
+///   - `radius`: The radius of the cylinder (f64)
+///   - `height`: The total height of the cylinder (f64)
+///   - `segments`: Number of segments for tessellation (u32)
+///   - `bottom_edge`: Corner treatment for bottom edge (object with type)
+///   - `top_edge`: Corner treatment for top edge (object with type)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Cylinder with sharp edges
+/// const mesh = create_cylinder({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: "Edge",
+///   top_edge: "Edge",
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Cylinder with chamfered edges
+/// const mesh = create_cylinder({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: { Chamfer: { distance: 0.1 } },
+///   top_edge: { Chamfer: { distance: 0.1 } },
+///   material: { Array: ["bottom_cap", "bottom_edge", "body", "top_edge", "top_cap"] }
+/// });
+///
+/// // Cylinder with filleted edges
+/// const mesh = create_cylinder({
+///   radius: 0.5,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: { Fillet: { radius: 0.1 } },
+///   top_edge: { Fillet: { radius: 0.1 } },
+///   material: { Uniform: "metal" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_cylinder(cylinder: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let cylinder: Cylinder = serde_wasm_bindgen::from_value(cylinder)
+        .map_err(|e| JsError::new(&format!("Failed to parse cylinder: {}", e)))?;
+
+    let triangular_mesh = cylinder
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create cylinder mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
+/// Creates a triangular mesh for a ConicalFrustum from a JavaScript object.
+///
+/// A conical frustum (truncated cone) supports 5 material regions:
+/// - Face 0: Bottom cap
+/// - Face 1: Bottom edge (chamfer or fillet)
+/// - Face 2: Conical body
+/// - Face 3: Top edge (chamfer or fillet)
+/// - Face 4: Top cap
+///
+/// # Arguments
+/// * `frustum` - A JavaScript object representing a `ConicalFrustum` with the following fields:
+///   - `bottom_radius`: The radius at the bottom of the frustum (f64)
+///   - `top_radius`: The radius at the top of the frustum (f64)
+///   - `height`: The total height of the frustum (f64)
+///   - `segments`: Number of segments for tessellation (u32)
+///   - `bottom_edge`: Corner treatment for bottom edge (object with type)
+///   - `top_edge`: Corner treatment for top edge (object with type)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Conical frustum with sharp edges
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.25,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: "Edge",
+///   top_edge: "Edge",
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Conical frustum with chamfered edges
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.25,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: { Chamfer: { distance: 0.1 } },
+///   top_edge: { Chamfer: { distance: 0.1 } },
+///   material: { Array: ["bottom_cap", "bottom_edge", "body", "top_edge", "top_cap"] }
+/// });
+///
+/// // Cone (top_radius = 0)
+/// const mesh = create_conical_frustum({
+///   bottom_radius: 0.5,
+///   top_radius: 0.0,
+///   height: 2.0,
+///   segments: 24,
+///   bottom_edge: "Edge",
+///   top_edge: "Edge",
+///   material: { Uniform: "default" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_conical_frustum(frustum: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let frustum: ConicalFrustum = serde_wasm_bindgen::from_value(frustum)
+        .map_err(|e| JsError::new(&format!("Failed to parse conical frustum: {}", e)))?;
+
+    let triangular_mesh = frustum
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create conical frustum mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planar_profile::Corner;
     use crate::platonic_solid::{Material, PlatonicSolid};
     use crate::sphere::Sphere;
 
@@ -252,29 +457,7 @@ mod tests {
     // Helper to create a Model directly for testing (since we can't create JsValue in tests)
     fn create_mesh_from_model(model: Model) -> WasmTriangularMesh {
         let triangular_mesh = model.to_triangular_mesh().unwrap();
-
-        let mut material_ids = Vec::new();
-        let mut geometries = Vec::new();
-
-        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-        sorted_materials.sort();
-
-        for material_id in sorted_materials {
-            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-                material_ids.push(material_id.clone());
-                geometries.push(WasmTriangularGeometry {
-                    vertices: geometry.vertices.clone(),
-                    normals: geometry.normals.clone(),
-                    uvs: geometry.uvs.clone(),
-                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-                });
-            }
-        }
-
-        WasmTriangularMesh {
-            material_ids,
-            geometries,
-        }
+        triangular_mesh_to_wasm(triangular_mesh)
     }
 
     #[test]
@@ -515,29 +698,7 @@ mod tests {
     // Helper to create a WasmTriangularMesh from a SphereModel directly for testing
     fn create_mesh_from_sphere_model(model: SphereModel) -> WasmTriangularMesh {
         let triangular_mesh = model.to_triangular_mesh().unwrap();
-
-        let mut material_ids = Vec::new();
-        let mut geometries = Vec::new();
-
-        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
-        sorted_materials.sort();
-
-        for material_id in sorted_materials {
-            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
-                material_ids.push(material_id.clone());
-                geometries.push(WasmTriangularGeometry {
-                    vertices: geometry.vertices.clone(),
-                    normals: geometry.normals.clone(),
-                    uvs: geometry.uvs.clone(),
-                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
-                });
-            }
-        }
-
-        WasmTriangularMesh {
-            material_ids,
-            geometries,
-        }
+        triangular_mesh_to_wasm(triangular_mesh)
     }
 
     #[test]
@@ -773,5 +934,964 @@ mod tests {
         );
         let mesh = create_mesh_from_sphere_model(model);
         assert_eq!(mesh.geometry_count(), 2); // "base" and "special"
+    }
+
+    // ==================== Torus Tests ====================
+
+    // Helper to create a WasmTriangularMesh from a Torus directly for testing
+    fn create_mesh_from_torus(torus: Torus) -> WasmTriangularMesh {
+        let triangular_mesh = torus.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_torus_uniform_material() {
+        let torus = Torus::new(2.0, 0.5, 36, 18, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_default_material() {
+        let torus = Torus::new(2.0, 0.5, 12, 8, Material::Default);
+        let mesh = create_mesh_from_torus(torus);
+
+        // Torus with default material creates unique material per face
+        assert!(mesh.geometry_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_geometry_data_not_empty() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_torus_geometry_data_sizes_consistent() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_torus_normals_are_normalized() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+            assert!(
+                (length - 1.0).abs() < 0.001,
+                "Normal not normalized: length = {}",
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_torus_indices_within_bounds() {
+        let torus = Torus::new(2.0, 0.5, 24, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_torus_different_segment_counts() {
+        let low_res = Torus::new(2.0, 0.5, 8, 6, Material::Uniform("default".to_string()));
+        let high_res = Torus::new(2.0, 0.5, 48, 24, Material::Uniform("default".to_string()));
+
+        let low_mesh = create_mesh_from_torus(low_res);
+        let high_mesh = create_mesh_from_torus(high_res);
+
+        let low_geo = low_mesh.get_geometry(0).unwrap();
+        let high_geo = high_mesh.get_geometry(0).unwrap();
+
+        // Higher resolution should have more triangles
+        assert!(high_geo.triangle_count() > low_geo.triangle_count());
+    }
+
+    #[test]
+    fn test_create_torus_thin_ring() {
+        // Test a torus where minor radius is much smaller than major radius
+        let torus = Torus::new(10.0, 0.1, 48, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_fat_ring() {
+        // Test a torus where minor radius approaches major radius
+        let torus = Torus::new(1.0, 0.9, 24, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_torus_get_geometry_by_material() {
+        let torus = Torus::new(
+            2.0,
+            0.5,
+            12,
+            8,
+            Material::Uniform("my_material".to_string()),
+        );
+        let mesh = create_mesh_from_torus(torus);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_torus_triangle_count_relationship() {
+        // For a torus with m major segments and n minor segments,
+        // we should have approximately m * n * 2 triangles (2 triangles per quad)
+        let major_segs = 12u32;
+        let minor_segs = 8u32;
+        let torus = Torus::new(
+            2.0,
+            0.5,
+            major_segs,
+            minor_segs,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_torus(torus);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // The exact number depends on the sampling, but should be proportional
+        // to major_segments * minor_segments * 2
+        let expected_min = (major_segs * minor_segs * 2) as usize;
+        assert!(
+            geometry.triangle_count() >= expected_min / 2,
+            "Triangle count {} is too low (expected at least {})",
+            geometry.triangle_count(),
+            expected_min / 2
+        );
+    }
+
+    // ==================== Capsule Tests ====================
+
+    // Helper to create a WasmTriangularMesh from a Capsule directly for testing
+    fn create_mesh_from_capsule(capsule: Capsule) -> WasmTriangularMesh {
+        let triangular_mesh = capsule.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_uniform_material() {
+        let capsule = Capsule::new(0.5, 2.0, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_default_material() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Default);
+        let mesh = create_mesh_from_capsule(capsule);
+
+        // Default material creates 3 regions for capsule
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_capsule_array_3_materials() {
+        let materials = vec!["bottom".to_string(), "body".to_string(), "top".to_string()];
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Array(materials));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        assert_eq!(mesh.geometry_count(), 3);
+        assert!(mesh.material_ids.contains(&"bottom".to_string()));
+        assert!(mesh.material_ids.contains(&"body".to_string()));
+        assert!(mesh.material_ids.contains(&"top".to_string()));
+    }
+
+    #[test]
+    fn test_create_capsule_geometry_data_not_empty() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_capsule_geometry_data_sizes_consistent() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_capsule_normals_are_normalized() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+
+            assert!(
+                (length - 1.0).abs() < 0.01,
+                "Normal at index {} should be normalized, but length is {}",
+                i / 3,
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_indices_within_bounds() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_capsule_zero_height() {
+        // A capsule with zero height is essentially a sphere
+        let capsule = Capsule::new(0.5, 0.0, 12, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_tall() {
+        // Test a tall capsule
+        let capsule = Capsule::new(0.5, 10.0, 24, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_capsule_get_geometry_by_material() {
+        let capsule = Capsule::new(0.5, 2.0, 12, Material::Uniform("my_material".to_string()));
+        let mesh = create_mesh_from_capsule(capsule);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_capsule_different_segment_counts() {
+        let low_res = Capsule::new(0.5, 2.0, 6, Material::Uniform("default".to_string()));
+        let high_res = Capsule::new(0.5, 2.0, 24, Material::Uniform("default".to_string()));
+
+        let low_mesh = create_mesh_from_capsule(low_res);
+        let high_mesh = create_mesh_from_capsule(high_res);
+
+        let low_geo = low_mesh.get_geometry(0).unwrap();
+        let high_geo = high_mesh.get_geometry(0).unwrap();
+
+        // Higher resolution should have more triangles
+        assert!(high_geo.triangle_count() > low_geo.triangle_count());
+    }
+
+    // =====================================================
+    // Cylinder Tests
+    // =====================================================
+
+    fn create_mesh_from_cylinder(cylinder: Cylinder) -> WasmTriangularMesh {
+        let triangular_mesh = cylinder
+            .to_triangular_mesh()
+            .expect("Failed to create cylinder mesh");
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_cylinder_uniform_material() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_cylinder_default_material_sharp_edges() {
+        let cylinder = Cylinder::new(0.5, 2.0, 12, Corner::Edge, Corner::Edge, Material::Default);
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // With sharp edges, cylinder has 3 material regions (bottom_cap, body, top_cap)
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_cylinder_default_material_with_chamfer() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // With chamfered edges, cylinder has 5 material regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_cylinder_default_material_with_fillet() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // With filleted edges, cylinder has 5 material regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_cylinder_array_5_materials() {
+        let materials = vec![
+            "bottom_cap".to_string(),
+            "bottom_edge".to_string(),
+            "body".to_string(),
+            "top_edge".to_string(),
+            "top_cap".to_string(),
+        ];
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Array(materials),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        assert_eq!(mesh.geometry_count(), 5);
+        assert!(mesh.material_ids.contains(&"bottom_cap".to_string()));
+        assert!(mesh.material_ids.contains(&"bottom_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"body".to_string()));
+        assert!(mesh.material_ids.contains(&"top_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"top_cap".to_string()));
+    }
+
+    #[test]
+    fn test_create_cylinder_mixed_edges() {
+        // Chamfer on bottom, Fillet on top
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // With both edge types, should have 5 material regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_cylinder_one_edge_sharp() {
+        // Sharp bottom, chamfered top
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // With one sharp edge, should have 4 material regions
+        assert_eq!(mesh.geometry_count(), 4);
+    }
+
+    #[test]
+    fn test_create_cylinder_geometry_data_not_empty() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert!(!geometry.vertices.is_empty());
+        assert!(!geometry.normals.is_empty());
+        assert!(!geometry.uvs.is_empty());
+        assert!(!geometry.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_cylinder_geometry_data_sizes_consistent() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        // vertices and normals should have same length (3 components each)
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        // uvs should have 2/3 the length of vertices (2 components vs 3)
+        assert_eq!(geometry.uvs.len() * 3, geometry.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_cylinder_normals_are_normalized() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+
+            assert!(
+                (length - 1.0).abs() < 0.01,
+                "Normal at index {} should be normalized, but length is {}",
+                i / 3,
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_cylinder_indices_within_bounds() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_cylinder_get_geometry_by_material() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("my_material".to_string()),
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_cylinder_different_segment_counts() {
+        let low_res = Cylinder::new(
+            0.5,
+            2.0,
+            6,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let high_res = Cylinder::new(
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+
+        let low_mesh = create_mesh_from_cylinder(low_res);
+        let high_mesh = create_mesh_from_cylinder(high_res);
+
+        let low_geo = low_mesh.get_geometry(0).unwrap();
+        let high_geo = high_mesh.get_geometry(0).unwrap();
+
+        // Higher resolution should have more triangles
+        assert!(high_geo.triangle_count() > low_geo.triangle_count());
+    }
+
+    #[test]
+    fn test_create_cylinder_smooth_edges() {
+        let cylinder = Cylinder::new(
+            0.5,
+            2.0,
+            12,
+            Corner::SmoothEdge,
+            Corner::SmoothEdge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_cylinder(cylinder);
+
+        // Smooth edges behave like sharp edges (no extra segments)
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    // =====================================================
+    // ConicalFrustum Tests
+    // =====================================================
+
+    /// Helper to create a WasmTriangularMesh from a ConicalFrustum directly
+    fn create_mesh_from_conical_frustum(frustum: ConicalFrustum) -> WasmTriangularMesh {
+        let triangular_mesh = frustum.to_triangular_mesh().unwrap();
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_conical_frustum_uniform_material() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+        assert!(geo.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_sharp_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Sharp edges: only 3 regions (bottom_cap, body, top_cap)
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_with_chamfer() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Chamfered edges: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_default_material_with_fillet() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Fillet { radius: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Filleted edges: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_array_5_materials() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Chamfer { distance: 0.1 },
+            Material::Array(vec![
+                "bottom_cap".to_string(),
+                "bottom_edge".to_string(),
+                "body".to_string(),
+                "top_edge".to_string(),
+                "top_cap".to_string(),
+            ]),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 5);
+        assert!(mesh.material_ids.contains(&"bottom_cap".to_string()));
+        assert!(mesh.material_ids.contains(&"bottom_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"body".to_string()));
+        assert!(mesh.material_ids.contains(&"top_edge".to_string()));
+        assert!(mesh.material_ids.contains(&"top_cap".to_string()));
+    }
+
+    #[test]
+    fn test_create_conical_frustum_mixed_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Chamfer { distance: 0.1 },
+            Corner::Fillet { radius: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Both edges have corners: 5 regions
+        assert_eq!(mesh.geometry_count(), 5);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_one_edge_sharp() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Chamfer { distance: 0.1 },
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // One sharp edge, one chamfered: 4 regions
+        assert_eq!(mesh.geometry_count(), 4);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_geometry_data_not_empty() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(!geo.vertices.is_empty());
+        assert!(!geo.normals.is_empty());
+        assert!(!geo.uvs.is_empty());
+        assert!(!geo.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_conical_frustum_geometry_data_sizes_consistent() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        let geo = mesh.geometries.get(0).unwrap();
+
+        // vertices and normals should have same length (3 components per vertex)
+        assert_eq!(geo.vertices.len(), geo.normals.len());
+        // uvs have 2 components per vertex, vertices have 3
+        assert_eq!(geo.uvs.len() * 3, geo.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_cone_shape() {
+        // Test a cone (top_radius = 0)
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.0,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_inverted_cone_shape() {
+        // Test an inverted cone (bottom_radius = 0)
+        let frustum = ConicalFrustum::new(
+            0.0,
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Uniform("default".to_string()),
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_equal_radii_is_cylinder_like() {
+        // When both radii are equal, it behaves like a cylinder
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.5,
+            2.0,
+            24,
+            Corner::Edge,
+            Corner::Edge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Sharp edges: 3 regions
+        assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    #[test]
+    fn test_create_conical_frustum_smooth_edges() {
+        let frustum = ConicalFrustum::new(
+            0.5,
+            0.25,
+            2.0,
+            12,
+            Corner::SmoothEdge,
+            Corner::SmoothEdge,
+            Material::Default,
+        );
+        let mesh = create_mesh_from_conical_frustum(frustum);
+
+        // Smooth edges behave like sharp edges (no extra segments)
+        assert_eq!(mesh.geometry_count(), 3);
     }
 }
