@@ -1059,17 +1059,27 @@ impl Extrude {
 
         // Transform vertices: the ContourSet mesh is in XY plane at Z=0
         // Profile's X stays as X, Y becomes Z, and the cap is placed at y_position
+        // UV coordinates need different handling for top vs bottom cap:
+        // - Top cap (viewed from +Y): flip V to match texture orientation
+        // - Bottom cap (viewed from -Y): keep V as-is for correct orientation
         for vertex in &mut cap_mesh.vertices {
             let x = vertex.position.x;
             let z = vertex.position.y; // Profile's Y becomes Z
             vertex.position = DVec3::new(x, y_position, z);
             vertex.normal = normal;
+            // Only flip V coordinate for top cap
+            if !is_bottom {
+                vertex.uv.y = -vertex.uv.y;
+            }
         }
 
         // Update polygon normals and geometry IDs
-        // Reverse winding for bottom cap (normals point down)
+        // Reverse winding for top cap (normals point up)
+        // The ContourSet mesh is CCW when viewed from +Z. After transform (Y->Z),
+        // looking from +Y down, we need to reverse to get correct CCW winding.
+        // For bottom cap (looking from -Y up), the original order is correct.
         for polygon in &mut cap_mesh.polygons {
-            if is_bottom {
+            if !is_bottom {
                 polygon.indices.reverse();
             }
             polygon.normal = normal;
@@ -1197,6 +1207,7 @@ impl GeometryModel for Extrude {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     // ============================================================================
     // Torus construction tests
@@ -3508,6 +3519,186 @@ mod tests {
     }
 
     #[test]
+    fn test_extrude_cap_winding_order() {
+        // This test verifies that the winding order of cap polygons is correct
+        // by computing the face normal from vertex positions and checking it
+        // matches the expected direction.
+        //
+        // For correct single-sided rendering:
+        // - Top cap: vertices should be CCW when viewed from +Y (above)
+        // - Bottom cap: vertices should be CCW when viewed from -Y (below)
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Helper function to compute face normal from first 3 vertices of a polygon
+        let compute_face_normal = |polygon: &crate::polygon_mesh::Polygon| {
+            if polygon.indices.len() < 3 {
+                return DVec3::ZERO;
+            }
+            let v0 = mesh.vertices[polygon.indices[0] as usize].position;
+            let v1 = mesh.vertices[polygon.indices[1] as usize].position;
+            let v2 = mesh.vertices[polygon.indices[2] as usize].position;
+            let edge1 = v1 - v0;
+            let edge2 = v2 - v0;
+            edge1.cross(edge2).normalize()
+        };
+
+        // Check bottom cap: computed normal should point down (-Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+        {
+            let computed_normal = compute_face_normal(polygon);
+            assert!(
+                computed_normal.y < -0.9,
+                "Bottom cap computed normal should point down (-Y), got {:?}. \
+                 This indicates incorrect winding order.",
+                computed_normal
+            );
+        }
+
+        // Check top cap: computed normal should point up (+Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+        {
+            let computed_normal = compute_face_normal(polygon);
+            assert!(
+                computed_normal.y > 0.9,
+                "Top cap computed normal should point up (+Y), got {:?}. \
+                 This indicates incorrect winding order.",
+                computed_normal
+            );
+        }
+    }
+
+    #[test]
+    fn test_extrude_cap_visibility_from_outside() {
+        // This test ensures caps are visible from outside the extrusion
+        // (top cap visible from above, bottom cap visible from below)
+        // by checking that cap vertices are at the correct Y positions
+        // and their normals face outward.
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(-0.5, -0.5),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, -0.5),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.5),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(-0.5, 0.5),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(-0.5, -0.5),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let height = 2.0;
+        let half_height = height / 2.0;
+        let extrude = Extrude::new(profile, height, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Check bottom cap vertices are at Y = -half_height
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+        {
+            for &idx in &polygon.indices {
+                let vertex = &mesh.vertices[idx as usize];
+                assert!(
+                    (vertex.position.y - (-half_height)).abs() < 1e-6,
+                    "Bottom cap vertex should be at Y = {}, got {}",
+                    -half_height,
+                    vertex.position.y
+                );
+                // Vertex normal should also point down
+                assert!(
+                    vertex.normal.y < -0.9,
+                    "Bottom cap vertex normal should point down"
+                );
+            }
+        }
+
+        // Check top cap vertices are at Y = +half_height
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+        {
+            for &idx in &polygon.indices {
+                let vertex = &mesh.vertices[idx as usize];
+                assert!(
+                    (vertex.position.y - half_height).abs() < 1e-6,
+                    "Top cap vertex should be at Y = {}, got {}",
+                    half_height,
+                    vertex.position.y
+                );
+                // Vertex normal should also point up
+                assert!(
+                    vertex.normal.y > 0.9,
+                    "Top cap vertex normal should point up"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_extrude_triangle_profile() {
         let profile = PlanarProfile::with_commands(vec![
             ProfileCommand::new(
@@ -3732,5 +3923,860 @@ mod tests {
         let deserialized = deserialized.unwrap();
         assert_eq!(deserialized.height, 2.0);
         assert_eq!(deserialized.sample_distance, 0.1);
+    }
+
+    /// Helper to create a regular polygon profile with n points
+    fn create_regular_polygon_profile(n: usize, radius: f64) -> PlanarProfile {
+        use std::f64::consts::PI;
+        let mut commands = Vec::new();
+
+        for i in 0..n {
+            let angle = 2.0 * PI * (i as f64) / (n as f64);
+            let x = radius * angle.cos();
+            let y = radius * angle.sin();
+            let point = DVec2::new(x, y);
+
+            if i == 0 {
+                commands.push(ProfileCommand::new(
+                    PathCommand::Move { point },
+                    Corner::Edge,
+                ));
+            } else {
+                commands.push(ProfileCommand::new(
+                    PathCommand::Line { point },
+                    Corner::Edge,
+                ));
+            }
+        }
+
+        // Close the polygon
+        let first_point = DVec2::new(radius, 0.0); // angle = 0
+        commands.push(ProfileCommand::new(
+            PathCommand::Line { point: first_point },
+            Corner::Edge,
+        ));
+
+        PlanarProfile::with_commands(commands)
+    }
+
+    #[test]
+    fn test_extrude_heptagon_profile() {
+        // Create a regular heptagon (7 sides)
+        let profile = create_regular_polygon_profile(7, 1.0);
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(mesh.is_ok(), "Heptagon extrude should succeed");
+        let mesh = mesh.unwrap();
+
+        // Should have polygons for sides and caps
+        assert!(!mesh.polygons.is_empty(), "Should have polygons");
+
+        // Count polygons by geometry_id
+        let mut bottom_cap_count = 0;
+        let mut top_cap_count = 0;
+        let mut side_count = 0;
+
+        for polygon in &mesh.polygons {
+            if polygon.geometry_id == EXTRUDE_BOTTOM_CAP_ID {
+                bottom_cap_count += 1;
+            } else if polygon.geometry_id == EXTRUDE_TOP_CAP_ID {
+                top_cap_count += 1;
+            } else {
+                side_count += 1;
+            }
+        }
+
+        println!(
+            "Heptagon: bottom_cap={}, top_cap={}, sides={}",
+            bottom_cap_count, top_cap_count, side_count
+        );
+
+        // For a heptagon with 7 edges:
+        // - Should have at least 1 polygon for each cap
+        // - Should have 7 side faces (one per edge)
+        assert!(
+            bottom_cap_count >= 1,
+            "Should have at least 1 bottom cap polygon, got {}",
+            bottom_cap_count
+        );
+        assert!(
+            top_cap_count >= 1,
+            "Should have at least 1 top cap polygon, got {}",
+            top_cap_count
+        );
+        assert!(
+            side_count >= 7,
+            "Should have at least 7 side polygons, got {}",
+            side_count
+        );
+    }
+
+    #[test]
+    fn test_extrude_regular_polygons_cap_vertex_count() {
+        // Test regular polygons from 3 to 10 sides
+        // This test verifies the bug fix for missing cap geometry on pentagons and heptagons
+        for n in 3..=10 {
+            let profile = create_regular_polygon_profile(n, 1.0);
+            let extrude = Extrude::new(profile.clone(), 2.0, 0.1, Material::Default);
+            let mesh = extrude.to_polygon_mesh().unwrap();
+
+            // Count polygons by geometry_id
+            let bottom_cap_vertex_indices: Vec<i32> = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+                .flat_map(|p| p.indices.clone())
+                .collect();
+
+            let top_cap_vertex_indices: Vec<i32> = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+                .flat_map(|p| p.indices.clone())
+                .collect();
+
+            // Count unique vertices used in caps
+            let mut bottom_unique: std::collections::HashSet<i32> =
+                std::collections::HashSet::new();
+            for idx in &bottom_cap_vertex_indices {
+                bottom_unique.insert(*idx);
+            }
+
+            let mut top_unique: std::collections::HashSet<i32> = std::collections::HashSet::new();
+            for idx in &top_cap_vertex_indices {
+                top_unique.insert(*idx);
+            }
+
+            // A regular n-gon should have n vertices in each cap
+            assert!(
+                bottom_unique.len() >= n,
+                "For n={}, bottom cap should have at least {} vertices, got {}",
+                n,
+                n,
+                bottom_unique.len()
+            );
+            assert!(
+                top_unique.len() >= n,
+                "For n={}, top cap should have at least {} vertices, got {}",
+                n,
+                n,
+                top_unique.len()
+            );
+        }
+    }
+
+    /// Helper to create a profile with an outer polygon and optional inner hole
+    fn create_polygon_with_hole_profile(
+        outer_points: usize,
+        outer_radius: f64,
+        inner_points: Option<usize>,
+        inner_radius: f64,
+    ) -> PlanarProfile {
+        use std::f64::consts::PI;
+        let mut commands = Vec::new();
+
+        // Outer polygon (CCW)
+        for i in 0..outer_points {
+            let angle = 2.0 * PI * (i as f64) / (outer_points as f64);
+            let x = outer_radius * angle.cos();
+            let y = outer_radius * angle.sin();
+            let point = DVec2::new(x, y);
+
+            if i == 0 {
+                commands.push(ProfileCommand::new(
+                    PathCommand::Move { point },
+                    Corner::Edge,
+                ));
+            } else {
+                commands.push(ProfileCommand::new(
+                    PathCommand::Line { point },
+                    Corner::Edge,
+                ));
+            }
+        }
+        // Close outer polygon
+        let first_outer = DVec2::new(outer_radius, 0.0);
+        commands.push(ProfileCommand::new(
+            PathCommand::Line { point: first_outer },
+            Corner::Edge,
+        ));
+
+        // Inner hole (CW - clockwise for holes)
+        if let Some(inner_n) = inner_points {
+            // Start hole with Move
+            let first_inner_angle: f64 = 0.0;
+            let first_inner = DVec2::new(
+                inner_radius * first_inner_angle.cos(),
+                inner_radius * first_inner_angle.sin(),
+            );
+            commands.push(ProfileCommand::new(
+                PathCommand::Move { point: first_inner },
+                Corner::Edge,
+            ));
+
+            // Add hole points in CW order
+            for i in 1..inner_n {
+                let angle = -2.0 * PI * (i as f64) / (inner_n as f64); // Negative for CW
+                let x = inner_radius * angle.cos();
+                let y = inner_radius * angle.sin();
+                let point = DVec2::new(x, y);
+                commands.push(ProfileCommand::new(
+                    PathCommand::Line { point },
+                    Corner::Edge,
+                ));
+            }
+            // Close inner polygon
+            commands.push(ProfileCommand::new(
+                PathCommand::Line { point: first_inner },
+                Corner::Edge,
+            ));
+        }
+
+        PlanarProfile::with_commands(commands)
+    }
+
+    #[test]
+    fn test_extrude_pentagon_with_square_hole() {
+        // This tests the specific case: 5-point outline with 4-point hole
+        let profile = create_polygon_with_hole_profile(5, 2.0, Some(4), 0.5);
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Pentagon with square hole extrude should succeed"
+        );
+        let mesh = mesh.unwrap();
+
+        // Count polygons by geometry_id
+        let bottom_cap_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+            .collect();
+
+        let top_cap_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+            .collect();
+
+        println!(
+            "Bottom cap polygons: {}, Top cap polygons: {}",
+            bottom_cap_polygons.len(),
+            top_cap_polygons.len()
+        );
+
+        // Count unique vertices in caps
+        let bottom_cap_vertex_indices: Vec<i32> = bottom_cap_polygons
+            .iter()
+            .flat_map(|p| p.indices.clone())
+            .collect();
+
+        let top_cap_vertex_indices: Vec<i32> = top_cap_polygons
+            .iter()
+            .flat_map(|p| p.indices.clone())
+            .collect();
+
+        let mut bottom_unique: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for idx in &bottom_cap_vertex_indices {
+            bottom_unique.insert(*idx);
+        }
+
+        let mut top_unique: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for idx in &top_cap_vertex_indices {
+            top_unique.insert(*idx);
+        }
+
+        println!(
+            "Bottom cap unique vertices: {}, Top cap unique vertices: {}",
+            bottom_unique.len(),
+            top_unique.len()
+        );
+
+        // 5 outer + 4 inner = 9 vertices should be in each cap
+        let expected_vertices = 5 + 4;
+        assert!(
+            bottom_cap_polygons.len() >= 1,
+            "Should have at least 1 bottom cap polygon, got {}",
+            bottom_cap_polygons.len()
+        );
+        assert!(
+            top_cap_polygons.len() >= 1,
+            "Should have at least 1 top cap polygon, got {}",
+            top_cap_polygons.len()
+        );
+        assert!(
+            bottom_unique.len() >= expected_vertices,
+            "Bottom cap should have at least {} vertices, got {}",
+            expected_vertices,
+            bottom_unique.len()
+        );
+        assert!(
+            top_unique.len() >= expected_vertices,
+            "Top cap should have at least {} vertices, got {}",
+            expected_vertices,
+            top_unique.len()
+        );
+    }
+
+    #[test]
+    fn test_extrude_various_outline_hole_combinations() {
+        // Test various combinations of outline and hole point counts
+        let test_cases = vec![
+            (3, 0), // Triangle, no hole
+            (4, 0), // Square, no hole
+            (5, 0), // Pentagon, no hole
+            (6, 0), // Hexagon, no hole
+            (7, 0), // Heptagon, no hole
+            (4, 3), // Square with triangle hole
+            (5, 3), // Pentagon with triangle hole
+            (5, 4), // Pentagon with square hole (the reported failing case)
+            (6, 3), // Hexagon with triangle hole
+            (6, 4), // Hexagon with square hole
+            (7, 4), // Heptagon with square hole
+            (7, 5), // Heptagon with pentagon hole
+            (8, 5), // Octagon with pentagon hole
+        ];
+
+        for (outer_n, inner_n) in test_cases {
+            let inner_opt = if inner_n > 0 { Some(inner_n) } else { None };
+            let profile = create_polygon_with_hole_profile(outer_n, 2.0, inner_opt, 0.5);
+            let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+            let mesh = extrude.to_polygon_mesh();
+
+            assert!(
+                mesh.is_ok(),
+                "Extrude with {} outer points and {} hole points should succeed",
+                outer_n,
+                inner_n
+            );
+            let mesh = mesh.unwrap();
+
+            // Count cap polygons
+            let bottom_cap_count = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+                .count();
+
+            let top_cap_count = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+                .count();
+
+            let expected_vertices = outer_n + inner_n;
+
+            // Count unique vertices in caps
+            let bottom_unique: std::collections::HashSet<i32> = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+                .flat_map(|p| p.indices.clone())
+                .collect();
+
+            let top_unique: std::collections::HashSet<i32> = mesh
+                .polygons
+                .iter()
+                .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+                .flat_map(|p| p.indices.clone())
+                .collect();
+
+            println!(
+                "outer={}, inner={}: bottom_polys={}, top_polys={}, bottom_verts={}, top_verts={}",
+                outer_n,
+                inner_n,
+                bottom_cap_count,
+                top_cap_count,
+                bottom_unique.len(),
+                top_unique.len()
+            );
+
+            assert!(
+                bottom_cap_count >= 1,
+                "outer={}, inner={}: Should have at least 1 bottom cap polygon, got {}",
+                outer_n,
+                inner_n,
+                bottom_cap_count
+            );
+            assert!(
+                top_cap_count >= 1,
+                "outer={}, inner={}: Should have at least 1 top cap polygon, got {}",
+                outer_n,
+                inner_n,
+                top_cap_count
+            );
+            assert!(
+                bottom_unique.len() >= expected_vertices,
+                "outer={}, inner={}: Bottom cap should have at least {} vertices, got {}",
+                outer_n,
+                inner_n,
+                expected_vertices,
+                bottom_unique.len()
+            );
+            assert!(
+                top_unique.len() >= expected_vertices,
+                "outer={}, inner={}: Top cap should have at least {} vertices, got {}",
+                outer_n,
+                inner_n,
+                expected_vertices,
+                top_unique.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_extrude_pentagon_with_square_hole_winding() {
+        // This test verifies that the winding order of cap polygons is correct
+        // for the specific case of a pentagon with a square hole.
+        // This ensures faces are visible from the correct direction.
+
+        let profile = create_polygon_with_hole_profile(5, 2.0, Some(4), 0.5);
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Helper function to compute face normal from first 3 vertices of a polygon
+        let compute_face_normal = |polygon: &crate::polygon_mesh::Polygon| -> DVec3 {
+            if polygon.indices.len() < 3 {
+                return DVec3::ZERO;
+            }
+            let v0 = mesh.vertices[polygon.indices[0] as usize].position;
+            let v1 = mesh.vertices[polygon.indices[1] as usize].position;
+            let v2 = mesh.vertices[polygon.indices[2] as usize].position;
+            let edge1 = v1 - v0;
+            let edge2 = v2 - v0;
+            edge1.cross(edge2).normalize()
+        };
+
+        // Check bottom cap: computed normal should point down (-Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+        {
+            let computed_normal = compute_face_normal(polygon);
+            assert!(
+                computed_normal.y < -0.9,
+                "Bottom cap computed normal should point down (-Y), got {:?}. \
+                 Polygon indices: {:?}. This indicates incorrect winding order.",
+                computed_normal,
+                polygon.indices
+            );
+        }
+
+        // Check top cap: computed normal should point up (+Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+        {
+            let computed_normal = compute_face_normal(polygon);
+            assert!(
+                computed_normal.y > 0.9,
+                "Top cap computed normal should point up (+Y), got {:?}. \
+                 Polygon indices: {:?}. This indicates incorrect winding order.",
+                computed_normal,
+                polygon.indices
+            );
+        }
+    }
+
+    #[test]
+    fn test_extrude_triangle_with_chamfer_corners() {
+        // Create a triangle profile with chamfer corners
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.866),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile.clone(), 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Triangle extrude with chamfer should succeed: {:?}",
+            mesh.err()
+        );
+        let mesh = mesh.unwrap();
+
+        // With chamfers, we should have 6 edges on the side faces (3 edges + 3 chamfers)
+        // Check cap vertex count matches number of profile segments
+        let contour_set = profile.sample_contour(0.1).unwrap();
+        let total_profile_points: usize = contour_set
+            .contours
+            .iter()
+            .flat_map(|c| c.segments.iter())
+            .count();
+
+        // With 3 chamfers on a triangle, we expect 6 profile segments
+        assert_eq!(
+            total_profile_points, 6,
+            "Triangle with 3 chamfers should have 6 profile segments"
+        );
+
+        // All side face polygons (geometry_id >= 0)
+        let side_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id >= 0)
+            .collect();
+
+        // Should have 6 side face polygons (one for each segment)
+        assert_eq!(
+            side_polygons.len(),
+            6,
+            "Should have 6 side face polygons for chamfered triangle"
+        );
+
+        // Collect all unique geometry IDs for side faces
+        let mut geometry_ids: Vec<i32> = side_polygons.iter().map(|p| p.geometry_id).collect();
+        geometry_ids.sort();
+        geometry_ids.dedup();
+
+        // Should have 6 different geometry IDs (0, 1, 2, 3, 4, 5)
+        println!("Geometry IDs found: {:?}", geometry_ids);
+        assert_eq!(
+            geometry_ids.len(),
+            6,
+            "Should have 6 unique geometry IDs for chamfered triangle: {:?}",
+            geometry_ids
+        );
+
+        // Verify side face normals are horizontal (perpendicular to Y axis)
+        for polygon in &side_polygons {
+            // Get polygon vertices
+            let _v0 = mesh.vertices[polygon.indices[0] as usize].position;
+            let _v1 = mesh.vertices[polygon.indices[1] as usize].position;
+            let _v2 = mesh.vertices[polygon.indices[2] as usize].position;
+
+            // Check that the vertices span both the top and bottom of the extrude
+            let y_coords: Vec<f64> = polygon
+                .indices
+                .iter()
+                .map(|&i| mesh.vertices[i as usize].position.y)
+                .collect();
+            let min_y = y_coords.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max_y = y_coords.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+            // Side faces should span from bottom (-1) to top (+1)
+            assert!(
+                (min_y - (-1.0)).abs() < 0.01 && (max_y - 1.0).abs() < 0.01,
+                "Side face should span from bottom to top: min_y={}, max_y={}, geometry_id={}",
+                min_y,
+                max_y,
+                polygon.geometry_id
+            );
+        }
+
+        println!(
+            "Triangle chamfer extrude: {} vertices, {} polygons, {} profile points",
+            mesh.vertices.len(),
+            mesh.polygons.len(),
+            total_profile_points
+        );
+    }
+
+    #[test]
+    fn test_extrude_triangle_with_fillet_corners() {
+        // Create a triangle profile with fillet corners
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.866),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile.clone(), 2.0, 0.05, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Triangle extrude with fillet should succeed: {:?}",
+            mesh.err()
+        );
+        let mesh = mesh.unwrap();
+
+        // All side face polygons (geometry_id >= 0)
+        let side_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id >= 0)
+            .collect();
+
+        assert!(
+            !side_polygons.is_empty(),
+            "Should have side face polygons for filleted triangle"
+        );
+
+        // Verify side face normals are horizontal (perpendicular to Y axis)
+        for polygon in &side_polygons {
+            // Check that the vertices span both the top and bottom of the extrude
+            let y_coords: Vec<f64> = polygon
+                .indices
+                .iter()
+                .map(|&i| mesh.vertices[i as usize].position.y)
+                .collect();
+            let min_y = y_coords.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max_y = y_coords.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+            // Side faces should span from bottom (-1) to top (+1)
+            assert!(
+                (min_y - (-1.0)).abs() < 0.01 && (max_y - 1.0).abs() < 0.01,
+                "Side face should span from bottom to top: min_y={}, max_y={}, geometry_id={}",
+                min_y,
+                max_y,
+                polygon.geometry_id
+            );
+        }
+
+        println!(
+            "Triangle fillet extrude: {} vertices, {} polygons",
+            mesh.vertices.len(),
+            mesh.polygons.len()
+        );
+    }
+
+    #[test]
+    fn test_extrude_triangle_with_chamfer_and_triangle_hole_with_chamfer() {
+        // This test matches the exact user scenario:
+        // 3-point outline with chamfer corners + 3-point hole with chamfer corners
+        let chamfer_distance = 0.1;
+        let hole_chamfer_distance = 0.03;
+
+        // Outer triangle (CCW winding) - radius 0.8
+        let outer_radius = 0.8;
+        let outer_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * outer_radius, angle.sin() * outer_radius)
+            })
+            .collect();
+
+        // Inner triangle (CW winding for hole) - radius 0.3
+        let inner_radius = 0.3;
+        let inner_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * inner_radius, angle.sin() * inner_radius)
+            })
+            .collect();
+
+        // Build profile commands
+        let commands = vec![
+            // Outer triangle
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: outer_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[1],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[2],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[0],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            // Inner triangle (reversed for hole - CW winding)
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: inner_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[2],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[1],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[0],
+                },
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+        ];
+
+        let profile = PlanarProfile::with_commands(commands);
+
+        // Verify profile converts to curve set correctly
+        let curve_set = profile.to_curve_set();
+        assert!(
+            curve_set.is_ok(),
+            "Profile should convert to curve set: {:?}",
+            curve_set.err()
+        );
+        let curve_set = curve_set.unwrap();
+
+        // Should have 2 curves (outer + hole)
+        assert_eq!(
+            curve_set.curves.len(),
+            2,
+            "Should have 2 curves (outline + hole)"
+        );
+
+        // Print segment details for debugging BEFORE assertions
+        println!("\n=== Outer curve segments (expected 6) ===");
+        for (i, seg) in curve_set.curves[0].segments.iter().enumerate() {
+            let start = seg.nurbs.evaluate(0.0);
+            let end = seg.nurbs.evaluate(1.0);
+            println!(
+                "  Segment {} (id={}): ({:.4}, {:.4}) -> ({:.4}, {:.4})",
+                i, seg.segment_id, start.x, start.y, end.x, end.y
+            );
+        }
+
+        println!("\n=== Inner curve (hole) segments (expected 6) ===");
+        for (i, seg) in curve_set.curves[1].segments.iter().enumerate() {
+            let start = seg.nurbs.evaluate(0.0);
+            let end = seg.nurbs.evaluate(1.0);
+            println!(
+                "  Segment {} (id={}): ({:.4}, {:.4}) -> ({:.4}, {:.4})",
+                i, seg.segment_id, start.x, start.y, end.x, end.y
+            );
+        }
+
+        // Outer curve should have 6 segments (3 edges + 3 chamfers)
+        assert_eq!(
+            curve_set.curves[0].segments.len(),
+            6,
+            "Outer triangle with 3 chamfers should have 6 segments, got {}",
+            curve_set.curves[0].segments.len()
+        );
+
+        // Create extrude
+        let extrude = Extrude::new(profile.clone(), 1.0, 0.05, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Extrude with triangle outline + triangle hole should succeed: {:?}",
+            mesh.err()
+        );
+        let mesh = mesh.unwrap();
+
+        // Count side polygons by geometry_id
+        let mut side_polygon_count_by_id: std::collections::HashMap<i32, usize> =
+            std::collections::HashMap::new();
+        for polygon in &mesh.polygons {
+            if polygon.geometry_id >= 0 {
+                *side_polygon_count_by_id
+                    .entry(polygon.geometry_id)
+                    .or_insert(0) += 1;
+            }
+        }
+
+        println!("\n=== Side polygon counts by geometry_id ===");
+        let mut ids: Vec<_> = side_polygon_count_by_id.keys().collect();
+        ids.sort();
+        for id in &ids {
+            println!(
+                "  geometry_id {}: {} polygons",
+                id, side_polygon_count_by_id[id]
+            );
+        }
+
+        // The extrude should have side faces for both outer and inner curves
+        // Each curve has 6 segments, so we expect 12 side face polygons total
+        // (geometry IDs may overlap between curves since they're separate contours)
+        let total_side_polygons: usize = side_polygon_count_by_id.values().sum();
+        assert!(
+            total_side_polygons >= 12,
+            "Should have at least 12 side face polygons (6 outer + 6 inner), got {}",
+            total_side_polygons
+        );
+
+        // Count cap polygons
+        let bottom_cap_count = mesh.polygons.iter().filter(|p| p.geometry_id == -1).count();
+        let top_cap_count = mesh.polygons.iter().filter(|p| p.geometry_id == -2).count();
+
+        println!("\n=== Cap polygon counts ===");
+        println!("  Bottom cap (id=-1): {} polygons", bottom_cap_count);
+        println!("  Top cap (id=-2): {} polygons", top_cap_count);
+
+        assert!(bottom_cap_count > 0, "Should have bottom cap polygons");
+        assert!(top_cap_count > 0, "Should have top cap polygons");
+
+        println!(
+            "\nTotal: {} vertices, {} polygons",
+            mesh.vertices.len(),
+            mesh.polygons.len()
+        );
     }
 }

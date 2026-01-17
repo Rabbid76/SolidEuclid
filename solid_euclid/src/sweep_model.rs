@@ -964,7 +964,7 @@ mod tests {
 
         // At the rightmost point of a CCW circle, tangent is (0, 1)
         let profile_tangent = DVec2::new(0.0, 1.0);
-        let normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
+        let _normal = SweepModel::<StraightLinePath, StraightLineProfile>::calculate_normal(
             profile_tangent,
             &matrix,
         );

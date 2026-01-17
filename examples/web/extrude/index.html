@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Extrude - SolidEuclid</title>
+    <link rel="icon" type="image/x-icon" href="../favicon.ico?v=2" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+      }
+      canvas {
+        display: block;
+      }
+      #menu {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 12px 16px;
+        border-radius: 8px;
+        color: white;
+        font-family: sans-serif;
+        font-size: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+      }
+      #menu label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+      }
+      #menu select,
+      #menu input {
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: none;
+        background: #333;
+        color: white;
+        cursor: pointer;
+      }
+      #menu input[type='number'] {
+        width: 70px;
+      }
+      #menu input[type='range'] {
+        width: 100px;
+      }
+      #menu input[type='checkbox'] {
+        width: auto;
+      }
+      .options-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #555;
+      }
+      .section-title {
+        font-weight: bold;
+        margin-bottom: 4px;
+        color: #aaa;
+      }
+      .edge-options {
+        margin-left: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="menu">
+      <div class="options-section">
+        <span class="section-title">Extrude Options</span>
+        <label>
+          Height:
+          <input type="range" id="height" value="1.0" min="0.1" max="3.0" step="0.1" />
+          <span id="heightValue">1.0</span>
+        </label>
+        <label>
+          Sample Distance:
+          <input type="number" id="sampleDistance" value="0.05" min="0.01" max="0.5" step="0.01" />
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Profile Outline</span>
+        <label>
+          Points:
+          <select id="outlinePoints">
+            <option value="3">3 (Triangle)</option>
+            <option value="4">4 (Square)</option>
+            <option value="5" selected>5 (Pentagon)</option>
+            <option value="6">6 (Hexagon)</option>
+            <option value="7">7 (Heptagon)</option>
+          </select>
+        </label>
+        <label>
+          Outline Radius:
+          <input type="number" id="outlineRadius" value="0.8" min="0.1" max="2.0" step="0.1" />
+        </label>
+        <label>
+          Corner Type:
+          <select id="outlineCornerType">
+            <option value="Edge">Sharp Edge</option>
+            <option value="SmoothEdge">Smooth Edge</option>
+            <option value="Chamfer">Chamfer</option>
+            <option value="Fillet" selected>Fillet</option>
+          </select>
+        </label>
+        <label id="outlineChamferDistanceLabel" style="display: none">
+          Chamfer Distance:
+          <input
+            type="range"
+            id="outlineChamferDistance"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="outlineChamferDistanceValue">0.1</span>
+        </label>
+        <label id="outlineFilletRadiusLabel">
+          Fillet Radius:
+          <input
+            type="range"
+            id="outlineFilletRadius"
+            value="0.1"
+            min="0.01"
+            max="0.3"
+            step="0.01"
+          />
+          <span id="outlineFilletRadiusValue">0.1</span>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Profile Hole</span>
+        <label>
+          Hole Points:
+          <select id="holePoints">
+            <option value="0">None</option>
+            <option value="3">3 (Triangle)</option>
+            <option value="4" selected>4 (Square)</option>
+            <option value="5">5 (Pentagon)</option>
+            <option value="6">6 (Hexagon)</option>
+            <option value="7">7 (Heptagon)</option>
+          </select>
+        </label>
+        <label id="holeRadiusLabel">
+          Hole Radius:
+          <input type="number" id="holeRadius" value="0.3" min="0.05" max="1.0" step="0.05" />
+        </label>
+        <label id="holeCornerTypeLabel">
+          Hole Corner Type:
+          <select id="holeCornerType">
+            <option value="Edge">Sharp Edge</option>
+            <option value="SmoothEdge">Smooth Edge</option>
+            <option value="Chamfer">Chamfer</option>
+            <option value="Fillet" selected>Fillet</option>
+          </select>
+        </label>
+        <label id="holeChamferDistanceLabel" style="display: none">
+          Chamfer Distance:
+          <input
+            type="range"
+            id="holeChamferDistance"
+            value="0.05"
+            min="0.01"
+            max="0.2"
+            step="0.01"
+          />
+          <span id="holeChamferDistanceValue">0.05</span>
+        </label>
+        <label id="holeFilletRadiusLabel">
+          Fillet Radius:
+          <input type="range" id="holeFilletRadius" value="0.05" min="0.01" max="0.2" step="0.01" />
+          <span id="holeFilletRadiusValue">0.05</span>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Transform Controls</span>
+        <label>
+          <input type="checkbox" id="showTransformControls" checked />
+          Show Point Controls
+        </label>
+        <label id="transformModeLabel">
+          Mode:
+          <select id="transformMode">
+            <option value="translate" selected>Translate</option>
+          </select>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">View</span>
+        <label>
+          View Mode:
+          <select id="viewMode">
+            <option value="geometry" selected>Geometry</option>
+            <option value="wireframe">Wireframe</option>
+            <option value="solid">Solid</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

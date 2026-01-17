@@ -138,6 +138,66 @@ impl PlanarProfile {
         self.commands.is_empty()
     }
 
+    /// Helper function to process a closing corner for a curve.
+    /// This handles the case where the curve forms a closed loop and has a pending corner
+    /// that needs to be added at the junction between the last and first segments.
+    fn process_closing_corner(
+        curve: &mut Curve,
+        pending_corner: &mut Option<(Corner, DVec2, DVec2)>,
+        current_pos: DVec2,
+        first_pos: DVec2,
+        path_segment_index: u32,
+    ) {
+        let is_closed = (current_pos - first_pos).length() < 1e-9;
+
+        if is_closed {
+            // Mark the curve as closed
+            curve.set_closed(true);
+
+            // Get the first segment's start tangent
+            if let (Some((corner, _end_pos, end_tangent)), Some(first_segment)) =
+                (pending_corner.take(), curve.segments.first())
+            {
+                let first_tangent = first_segment.nurbs.derivative(0.0).normalize_or_zero();
+
+                // Add closing corner segment if needed
+                if let Some(corner_nurbs) =
+                    Self::create_corner_nurbs(corner, current_pos, end_tangent, first_tangent)
+                {
+                    let corner_start = corner_nurbs.start_point();
+                    let corner_end = corner_nurbs.end_point();
+
+                    // Truncate the LAST segment to end at corner_start
+                    if let Some(last_segment) = curve.segments.last_mut() {
+                        let seg_start = last_segment.nurbs.start_point();
+                        last_segment.nurbs = Nurbs::line(seg_start, corner_start);
+                        last_segment.end_distance =
+                            last_segment.start_distance + last_segment.nurbs.length();
+                    }
+
+                    // Add the corner segment
+                    let corner_segment_id = path_segment_index * 2 - 1;
+                    curve.add_segment(NurbsSegment::new(
+                        corner_nurbs,
+                        curve.total_length(),
+                        false,
+                        corner_segment_id,
+                    ));
+
+                    // Truncate the FIRST segment to start at corner_end
+                    if let Some(first_segment) = curve.segments.first_mut() {
+                        let seg_end = first_segment.nurbs.end_point();
+                        first_segment.nurbs = Nurbs::line(corner_end, seg_end);
+                        // Recalculate distances for first segment
+                        // Note: start_distance stays 0 for first segment
+                        first_segment.end_distance =
+                            first_segment.start_distance + first_segment.nurbs.length();
+                    }
+                }
+            }
+        }
+    }
+
     /// Converts this `PlanarProfile` to a `CurveSet`.
     ///
     /// Each `ProfileCommand` is converted to 0, 1, or 2 NURBS segments:
@@ -169,6 +229,19 @@ impl PlanarProfile {
                             parameter: format!("commands[{}].corner", cmd_idx),
                             message: "Move command must have Edge corner".to_string(),
                         });
+                    }
+
+                    // Process closing corner for current curve before finalizing
+                    if let Some(curve) = current_curve.as_mut() {
+                        if !curve.is_empty() {
+                            Self::process_closing_corner(
+                                curve,
+                                &mut pending_corner,
+                                current_pos,
+                                first_pos,
+                                path_segment_index,
+                            );
+                        }
                     }
 
                     // Finalize current curve if exists
@@ -321,38 +394,16 @@ impl PlanarProfile {
             }
         }
 
-        // Handle closing corner if the curve is closed
+        // Handle closing corner for the last curve
         if let Some(curve) = current_curve.as_mut() {
             if !curve.is_empty() {
-                let is_closed = (current_pos - first_pos).length() < 1e-9;
-
-                if is_closed {
-                    // Mark the curve as closed
-                    curve.set_closed(true);
-
-                    // Get the first segment's start tangent
-                    if let (Some((corner, _end_pos, end_tangent)), Some(first_segment)) =
-                        (pending_corner.take(), curve.segments.first())
-                    {
-                        let first_tangent = first_segment.nurbs.derivative(0.0).normalize_or_zero();
-
-                        // Add closing corner segment if needed
-                        if let Some(corner_nurbs) = Self::create_corner_nurbs(
-                            corner,
-                            current_pos,
-                            end_tangent,
-                            first_tangent,
-                        ) {
-                            let corner_segment_id = path_segment_index * 2 - 1;
-                            curve.add_segment(NurbsSegment::new(
-                                corner_nurbs,
-                                curve.total_length(),
-                                false,
-                                corner_segment_id,
-                            ));
-                        }
-                    }
-                }
+                Self::process_closing_corner(
+                    curve,
+                    &mut pending_corner,
+                    current_pos,
+                    first_pos,
+                    path_segment_index,
+                );
             }
         }
 
@@ -3182,5 +3233,107 @@ mod tests {
             assert!(mesh.is_empty(), "Empty profile should produce empty mesh");
         }
         // If it's an error, that's also acceptable
+    }
+
+    /// Detailed diagnostic test for triangle with chamfer corners
+    #[test]
+    fn test_triangle_profile_with_chamfer_corners_diagnostic() {
+        // Create a triangle profile with chamfer corners at all 3 vertices
+        let chamfer_distance = 0.1;
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.866),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+        ]);
+
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(
+            curve_set.curves.len(),
+            1,
+            "Should have exactly 1 curve for the outline"
+        );
+        let curve = &curve_set.curves[0];
+
+        // Triangle with 3 chamfers should have 6 segments:
+        // 3 edge segments (truncated at both ends) + 3 chamfer segments
+        println!("\n=== Triangle Chamfer Profile Diagnostic ===");
+        println!("Number of segments: {}", curve.segments.len());
+
+        for (i, segment) in curve.segments.iter().enumerate() {
+            let start = segment.nurbs.evaluate(0.0);
+            let end = segment.nurbs.evaluate(1.0);
+            let mid = segment.nurbs.evaluate(0.5);
+            println!(
+                "Segment {} (id={}): start=({:.4}, {:.4}), end=({:.4}, {:.4}), mid=({:.4}, {:.4})",
+                i, segment.segment_id, start.x, start.y, end.x, end.y, mid.x, mid.y
+            );
+        }
+
+        // Verify we have 6 segments
+        assert_eq!(
+            curve.segments.len(),
+            6,
+            "Triangle with 3 chamfers should have 6 segments (3 edges + 3 chamfers)"
+        );
+
+        // Verify segments form a closed loop (end of each segment is start of next)
+        for i in 0..curve.segments.len() {
+            let this_end = curve.segments[i].nurbs.evaluate(1.0);
+            let next_start = curve.segments[(i + 1) % curve.segments.len()]
+                .nurbs
+                .evaluate(0.0);
+            let gap = (this_end - next_start).length();
+            assert!(
+                gap < 1e-9,
+                "Gap between segment {} end and segment {} start: {} (end={:?}, start={:?})",
+                i,
+                (i + 1) % curve.segments.len(),
+                gap,
+                this_end,
+                next_start
+            );
+        }
+
+        // Verify segment connectivity back to start
+        let first_start = curve.segments[0].nurbs.evaluate(0.0);
+        let last_end = curve.segments.last().unwrap().nurbs.evaluate(1.0);
+        let closing_gap = (last_end - first_start).length();
+        assert!(
+            closing_gap < 1e-9,
+            "Closing gap: {} (last_end={:?}, first_start={:?})",
+            closing_gap,
+            last_end,
+            first_start
+        );
+
+        println!("All 6 segments present and connected!\n");
     }
 }

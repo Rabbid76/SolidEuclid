@@ -579,5 +579,214 @@ describe('Extrude WebAssembly API', () => {
         mesh.free();
       });
     });
+
+    describe('profiles with holes', () => {
+      // Helper to create a regular polygon profile with optional hole
+      const createPolygonWithHole = (
+        outerPoints: number,
+        outerRadius: number,
+        holePoints: number,
+        holeRadius: number
+      ) => {
+        const commands: Array<{ path: object; corner: string }> = [];
+
+        // Outer polygon (CCW order)
+        for (let i = 0; i < outerPoints; i++) {
+          const angle = (i / outerPoints) * Math.PI * 2;
+          const x = Math.cos(angle) * outerRadius;
+          const y = Math.sin(angle) * outerRadius;
+          if (i === 0) {
+            commands.push({ path: { Move: { point: [x, y] } }, corner: 'Edge' });
+          } else {
+            commands.push({ path: { Line: { point: [x, y] } }, corner: 'Edge' });
+          }
+        }
+        // Close outer polygon
+        commands.push({ path: { Line: { point: [outerRadius, 0] } }, corner: 'Edge' });
+
+        // Hole (CW order - reversed)
+        if (holePoints > 0) {
+          for (let i = 0; i < holePoints; i++) {
+            const angle = -(i / holePoints) * Math.PI * 2; // Negative for CW
+            const x = Math.cos(angle) * holeRadius;
+            const y = Math.sin(angle) * holeRadius;
+            if (i === 0) {
+              commands.push({ path: { Move: { point: [x, y] } }, corner: 'Edge' });
+            } else {
+              commands.push({ path: { Line: { point: [x, y] } }, corner: 'Edge' });
+            }
+          }
+          // Close hole
+          commands.push({ path: { Line: { point: [holeRadius, 0] } }, corner: 'Edge' });
+        }
+
+        return { commands };
+      };
+
+      it('should create an extrusion with a square and triangle hole', () => {
+        const profile = createPolygonWithHole(4, 2.0, 3, 0.5);
+        const mesh = create_extrude({
+          profile,
+          height: 2.0,
+          sample_distance: 0.1,
+          material: { Uniform: 'default' },
+        });
+
+        expect(mesh).toBeDefined();
+        expect(mesh.geometry_count).toBe(1);
+
+        const geo = mesh.get_geometry(0);
+        expect(geo).toBeDefined();
+        // 4 outer + 3 inner = 7 vertices minimum for caps
+        // Plus vertices for sides
+        expect(geo!.vertex_count).toBeGreaterThan(7);
+        expect(geo!.triangle_count).toBeGreaterThan(0);
+
+        mesh.free();
+      });
+
+      it('should create an extrusion with a pentagon and square hole', () => {
+        // This is the specific failing case reported
+        const profile = createPolygonWithHole(5, 2.0, 4, 0.5);
+        const mesh = create_extrude({
+          profile,
+          height: 2.0,
+          sample_distance: 0.1,
+          material: { Uniform: 'default' },
+        });
+
+        expect(mesh).toBeDefined();
+        expect(mesh.geometry_count).toBe(1);
+
+        const geo = mesh.get_geometry(0);
+        expect(geo).toBeDefined();
+        // 5 outer + 4 inner = 9 vertices minimum for caps
+        expect(geo!.vertex_count).toBeGreaterThan(9);
+        expect(geo!.triangle_count).toBeGreaterThan(0);
+
+        // Verify normals are normalized
+        const normals = geo!.normals;
+        for (let i = 0; i < normals.length; i += 3) {
+          const nx = normals[i];
+          const ny = normals[i + 1];
+          const nz = normals[i + 2];
+          const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+          expect(length).toBeCloseTo(1.0, 2);
+        }
+
+        mesh.free();
+      });
+
+      it('should create various outline and hole combinations', () => {
+        const testCases = [
+          { outer: 4, hole: 3 }, // Square with triangle hole
+          { outer: 5, hole: 3 }, // Pentagon with triangle hole
+          { outer: 5, hole: 4 }, // Pentagon with square hole
+          { outer: 6, hole: 3 }, // Hexagon with triangle hole
+          { outer: 6, hole: 4 }, // Hexagon with square hole
+          { outer: 7, hole: 4 }, // Heptagon with square hole
+          { outer: 8, hole: 5 }, // Octagon with pentagon hole
+        ];
+
+        for (const { outer, hole } of testCases) {
+          const profile = createPolygonWithHole(outer, 2.0, hole, 0.5);
+          const mesh = create_extrude({
+            profile,
+            height: 2.0,
+            sample_distance: 0.1,
+            material: { Uniform: 'default' },
+          });
+
+          expect(mesh).toBeDefined();
+          expect(mesh.geometry_count).toBe(1);
+
+          const geo = mesh.get_geometry(0);
+          expect(geo).toBeDefined();
+          expect(geo!.vertex_count).toBeGreaterThan(outer + hole);
+          expect(geo!.triangle_count).toBeGreaterThan(0);
+
+          mesh.free();
+        }
+      });
+
+      it('should create triangle with chamfer corners and triangle hole with chamfer', () => {
+        // This matches the visual issue seen in the extrude example:
+        // 3-point outline + 3-point hole, both with chamfer corners
+        const chamferDistance = 0.1;
+        const outerRadius = 1.0;
+        const innerRadius = 0.3;
+
+        // Generate triangle points
+        const outerPoints: [number, number][] = [];
+        const innerPoints: [number, number][] = [];
+
+        for (let i = 0; i < 3; i++) {
+          const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
+          outerPoints.push([Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius]);
+        }
+
+        for (let i = 0; i < 3; i++) {
+          const angle = (i / 3) * Math.PI * 2 - Math.PI / 2;
+          innerPoints.push([Math.cos(angle) * innerRadius, Math.sin(angle) * innerRadius]);
+        }
+
+        // Build profile with chamfer corners
+        const commands = [
+          // Outer triangle (counter-clockwise)
+          { path: { Move: { point: outerPoints[0] } }, corner: 'Edge' },
+          {
+            path: { Line: { point: outerPoints[1] } },
+            corner: { Chamfer: { distance: chamferDistance } },
+          },
+          {
+            path: { Line: { point: outerPoints[2] } },
+            corner: { Chamfer: { distance: chamferDistance } },
+          },
+          {
+            path: { Line: { point: outerPoints[0] } },
+            corner: { Chamfer: { distance: chamferDistance } },
+          },
+          // Inner triangle (clockwise for hole)
+          { path: { Move: { point: innerPoints[0] } }, corner: 'Edge' },
+          {
+            path: { Line: { point: innerPoints[2] } },
+            corner: { Chamfer: { distance: chamferDistance * 0.3 } },
+          },
+          {
+            path: { Line: { point: innerPoints[1] } },
+            corner: { Chamfer: { distance: chamferDistance * 0.3 } },
+          },
+          {
+            path: { Line: { point: innerPoints[0] } },
+            corner: { Chamfer: { distance: chamferDistance * 0.3 } },
+          },
+        ];
+
+        const mesh = create_extrude({
+          profile: { commands },
+          height: 2.0,
+          sample_distance: 0.1,
+          material: { Uniform: 'default' },
+        });
+
+        expect(mesh).toBeDefined();
+        expect(mesh.geometry_count).toBe(1);
+
+        const geo = mesh.get_geometry(0);
+        expect(geo).toBeDefined();
+
+        // With chamfers, a triangle should have 6 segments (3 edges + 3 chamfers)
+        // For outline + hole, we expect adequate vertices
+        expect(geo!.vertex_count).toBeGreaterThan(12);
+        expect(geo!.triangle_count).toBeGreaterThan(0);
+
+        // Log for diagnostics
+        console.log(
+          `Triangle+chamfer extrude: ${geo!.vertex_count} vertices, ${geo!.triangle_count} triangles`
+        );
+
+        mesh.free();
+      });
+    });
   });
 });

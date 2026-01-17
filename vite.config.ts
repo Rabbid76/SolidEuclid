@@ -18,6 +18,9 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'examples/web/index.html'),
         platonic_solid: resolve(__dirname, 'examples/web/platonic_solid/index.html'),
+        sphere: resolve(__dirname, 'examples/web/sphere/index.html'),
+        sweeps: resolve(__dirname, 'examples/web/sweeps/index.html'),
+        extrude: resolve(__dirname, 'examples/web/extrude/index.html'),
       },
     },
   },

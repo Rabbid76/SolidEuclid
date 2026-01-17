@@ -323,10 +323,32 @@ fn is_convex_angle(prev: DVec2, current: DVec2, next: DVec2) -> bool {
     cross >= -1e-10 // Allow small tolerance for numerical precision
 }
 
+/// Checks if an entire polygon is convex.
+///
+/// Returns true if all interior angles are convex (≤ 180°) for a CCW polygon.
+fn is_polygon_convex(indices: &[usize], vertices: &[DVec2]) -> bool {
+    let n = indices.len();
+    if n < 3 {
+        return false;
+    }
+    for i in 0..n {
+        let prev = vertices[indices[(i + n - 1) % n]];
+        let curr = vertices[indices[i]];
+        let next = vertices[indices[(i + 1) % n]];
+        if !is_convex_angle(prev, curr, next) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Merges two polygons that share an edge, removing the shared edge.
 ///
 /// The resulting polygon contains the vertices from both polygons in CCW order,
 /// with the shared edge vertices included once each.
+///
+/// Precondition: The shared edge must be traversed in opposite directions in the two polygons
+/// (i.e., if poly_a goes v0 -> v1, then poly_b should go v1 -> v0).
 fn merge_polygons(
     poly_a: &StitchPolygon,
     poly_b: &StitchPolygon,
@@ -334,33 +356,60 @@ fn merge_polygons(
     edge_v1: usize,
 ) -> StitchPolygon {
     // Find positions of shared vertices in both polygons
-    let _pos_v0_a = poly_a.position_of(edge_v0).unwrap();
+    let pos_v0_a = poly_a.position_of(edge_v0).unwrap();
     let pos_v1_a = poly_a.position_of(edge_v1).unwrap();
     let pos_v0_b = poly_b.position_of(edge_v0).unwrap();
-    let _pos_v1_b = poly_b.position_of(edge_v1).unwrap();
+    let pos_v1_b = poly_b.position_of(edge_v1).unwrap();
 
     let n_a = poly_a.indices.len();
     let n_b = poly_b.indices.len();
 
-    // Determine the correct traversal order
-    // In CCW order, if v0 -> v1 is an edge in poly_a, then in poly_b it should be v1 -> v0
     let mut result = Vec::new();
 
-    // Start from the vertex after v1 in poly_a and traverse to v0
-    let mut i = (pos_v1_a + 1) % n_a;
-    while poly_a.indices[i] != edge_v0 {
-        result.push(poly_a.indices[i]);
-        i = (i + 1) % n_a;
-    }
-    result.push(edge_v0);
+    // Check the edge orientation in poly_a: does v0 come immediately before v1 in CCW order?
+    let v0_before_v1_in_a = (pos_v0_a + 1) % n_a == pos_v1_a;
 
-    // Continue from the vertex after v0 in poly_b to v1
-    let mut j = (pos_v0_b + 1) % n_b;
-    while poly_b.indices[j] != edge_v1 {
-        result.push(poly_b.indices[j]);
-        j = (j + 1) % n_b;
+    if v0_before_v1_in_a {
+        // In poly_a, edge goes v0 -> v1
+        // For correct merging (edges in opposite directions), poly_b should go v1 -> v0
+        // We traverse: (after v1 in a) ... v0, then (after v0 in b) ... v1
+        let mut i = (pos_v1_a + 1) % n_a;
+        while poly_a.indices[i] != edge_v0 {
+            result.push(poly_a.indices[i]);
+            i = (i + 1) % n_a;
+        }
+        result.push(edge_v0);
+
+        // In poly_b, we need to go from v0 to v1
+        // If poly_b has v1 -> v0 (expected), then pos_v0_b is after pos_v1_b
+        // We traverse: (after v0 in b) ... v1
+        let mut j = (pos_v0_b + 1) % n_b;
+        while poly_b.indices[j] != edge_v1 {
+            result.push(poly_b.indices[j]);
+            j = (j + 1) % n_b;
+        }
+        result.push(edge_v1);
+    } else {
+        // In poly_a, edge goes v1 -> v0 (v1 is immediately before v0)
+        // For correct merging, poly_b should go v0 -> v1
+        // We traverse: (after v0 in a) ... v1, then (after v1 in b) ... v0
+        let mut i = (pos_v0_a + 1) % n_a;
+        while poly_a.indices[i] != edge_v1 {
+            result.push(poly_a.indices[i]);
+            i = (i + 1) % n_a;
+        }
+        result.push(edge_v1);
+
+        // In poly_b, we need to go from v1 to v0
+        // If poly_b has v0 -> v1 (expected), then pos_v1_b is after pos_v0_b
+        // We traverse: (after v1 in b) ... v0
+        let mut j = (pos_v1_b + 1) % n_b;
+        while poly_b.indices[j] != edge_v0 {
+            result.push(poly_b.indices[j]);
+            j = (j + 1) % n_b;
+        }
+        result.push(edge_v0);
     }
-    result.push(edge_v1);
 
     StitchPolygon {
         indices: result,
@@ -457,8 +506,9 @@ fn hertel_mehlhorn_stitch(triangles: &[usize], vertices: &[DVec2]) -> Vec<Vec<us
         let pre_v1_b = poly_b.vertex_before(edge.v1);
         let post_v1_a = poly_a.vertex_after(edge.v1);
 
-        // Check convexity at both endpoints of the shared edge
-        let can_merge = match (pre_v0_a, post_v0_b, pre_v1_b, post_v1_a) {
+        // Quick check: convexity at both endpoints of the shared edge
+        // This is a necessary but not sufficient condition for the merge to be valid
+        let quick_convex_check = match (pre_v0_a, post_v0_b, pre_v1_b, post_v1_a) {
             (Some(pre_v0), Some(post_v0), Some(pre_v1), Some(post_v1)) => {
                 // For the merged polygon:
                 // At v0: check angle from pre_v0_a -> v0 -> post_v0_b
@@ -472,9 +522,16 @@ fn hertel_mehlhorn_stitch(triangles: &[usize], vertices: &[DVec2]) -> Vec<Vec<us
             _ => false,
         };
 
-        if can_merge {
-            // Merge the polygons
+        if quick_convex_check {
+            // Merge the polygons and verify the entire result is convex
             let merged = merge_polygons(&poly_a, &poly_b, edge.v0, edge.v1);
+
+            // Full convexity check on the merged polygon
+            // This is necessary because merging can create reflex angles at vertices
+            // other than the shared edge endpoints (especially with holes)
+            if !is_polygon_convex(&merged.indices, vertices) {
+                continue; // Skip this merge - it would create a non-convex polygon
+            }
 
             // Update union-find
             parent[root_b] = root_a;
@@ -1671,6 +1728,331 @@ mod tests {
         assert_eq!(result.len(), 2);
     }
 
+    #[test]
+    fn test_hertel_mehlhorn_regular_pentagon() {
+        use std::f64::consts::PI;
+
+        // Create a regular pentagon with vertices in CCW order
+        // This test verifies the bug fix for merge_polygons when edge orientation varies
+        let n = 5;
+        let radius = 1.0;
+        let vertices: Vec<DVec2> = (0..n)
+            .map(|i| {
+                let angle = 2.0 * PI * (i as f64) / (n as f64);
+                DVec2::new(radius * angle.cos(), radius * angle.sin())
+            })
+            .collect();
+
+        // Triangulate the pentagon using earcut
+        let coords: Vec<f64> = vertices.iter().flat_map(|v| vec![v.x, v.y]).collect();
+        let triangles = earcutr::earcut(&coords, &[], 2).unwrap();
+
+        // Should produce n-2 = 3 triangles
+        assert_eq!(triangles.len() / 3, 3);
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+        // A convex pentagon should merge into a single polygon with all 5 vertices
+        assert_eq!(
+            result.len(),
+            1,
+            "Pentagon should produce exactly one polygon"
+        );
+        assert_eq!(
+            result[0].len(),
+            5,
+            "Pentagon polygon should have exactly 5 vertices"
+        );
+
+        // Verify all vertices are present (indices 0-4)
+        let mut vertex_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &idx in &result[0] {
+            vertex_set.insert(idx);
+        }
+        assert_eq!(vertex_set.len(), 5, "All 5 vertices should be present");
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_regular_heptagon() {
+        use std::f64::consts::PI;
+
+        // Create a regular heptagon (7 sides) to test the original bug case
+        let n = 7;
+        let radius = 1.0;
+        let vertices: Vec<DVec2> = (0..n)
+            .map(|i| {
+                let angle = 2.0 * PI * (i as f64) / (n as f64);
+                DVec2::new(radius * angle.cos(), radius * angle.sin())
+            })
+            .collect();
+
+        let coords: Vec<f64> = vertices.iter().flat_map(|v| vec![v.x, v.y]).collect();
+        let triangles = earcutr::earcut(&coords, &[], 2).unwrap();
+
+        // Should produce n-2 = 5 triangles
+        assert_eq!(triangles.len() / 3, 5);
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+        // A convex heptagon should merge into a single polygon with all 7 vertices
+        assert_eq!(
+            result.len(),
+            1,
+            "Heptagon should produce exactly one polygon"
+        );
+        assert_eq!(
+            result[0].len(),
+            7,
+            "Heptagon polygon should have exactly 7 vertices"
+        );
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_pentagon_with_square_hole() {
+        // This test reproduces the exact issue from the web example:
+        // A regular pentagon (5 points) with a regular square hole (4 points)
+        // The vertices match what the web example generates
+        use std::f64::consts::PI;
+
+        let outer_n = 5;
+        let inner_n = 4;
+        let outer_radius = 2.0;
+        let inner_radius = 0.5;
+
+        // Outer pentagon vertices (CCW) - matching web example starting at top
+        let outer_vertices: Vec<DVec2> = (0..outer_n)
+            .map(|i| {
+                let angle = (i as f64 / outer_n as f64) * 2.0 * PI - PI / 2.0;
+                DVec2::new(outer_radius * angle.cos(), outer_radius * angle.sin())
+            })
+            .collect();
+
+        // Inner square hole vertices (CW) - matching web example
+        let inner_vertices: Vec<DVec2> = (0..inner_n)
+            .map(|i| {
+                let angle = -((i as f64 / inner_n as f64) * 2.0 * PI - PI / 2.0);
+                DVec2::new(inner_radius * angle.cos(), inner_radius * angle.sin())
+            })
+            .collect();
+
+        // Combine all vertices
+        let mut all_vertices = outer_vertices.clone();
+        all_vertices.extend(inner_vertices.clone());
+
+        // Create earcut format
+        let coords: Vec<f64> = all_vertices.iter().flat_map(|v| vec![v.x, v.y]).collect();
+        let hole_indices = vec![outer_n]; // Hole starts at index 5
+
+        // Triangulate
+        let triangles = earcutr::earcut(&coords, &hole_indices, 2).unwrap();
+
+        println!("Triangles from earcut: {}", triangles.len() / 3);
+        for i in 0..(triangles.len() / 3) {
+            println!(
+                "  Triangle {}: [{}, {}, {}]",
+                i,
+                triangles[i * 3],
+                triangles[i * 3 + 1],
+                triangles[i * 3 + 2]
+            );
+        }
+
+        // Apply Hertel-Mehlhorn stitch
+        let polygons = hertel_mehlhorn_stitch(&triangles, &all_vertices);
+
+        println!("Polygons after stitch: {}", polygons.len());
+        for (i, poly) in polygons.iter().enumerate() {
+            println!("  Polygon {}: {:?}", i, poly);
+        }
+
+        // Verify each polygon is actually convex and doesn't cross through the hole
+        for (poly_idx, polygon) in polygons.iter().enumerate() {
+            // Check that the polygon is convex
+            let n = polygon.len();
+            for i in 0..n {
+                let prev = all_vertices[polygon[(i + n - 1) % n]];
+                let curr = all_vertices[polygon[i]];
+                let next = all_vertices[polygon[(i + 1) % n]];
+                assert!(
+                    is_convex_angle(prev, curr, next),
+                    "Polygon {} is not convex at vertex {} (index {})",
+                    poly_idx,
+                    i,
+                    polygon[i]
+                );
+            }
+
+            // Check that the polygon doesn't include vertices from both opposite sides
+            // of the hole. If a polygon has 3+ hole vertices, they should be consecutive
+            // in the hole order, not scattered.
+            let hole_vertex_positions: Vec<usize> = polygon
+                .iter()
+                .filter_map(|&v| {
+                    if v >= outer_n {
+                        Some(v - outer_n) // Position in the hole (0-3)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // A valid polygon should not have more than 2 non-consecutive hole vertices
+            // because that would mean it's crossing through the hole
+            if hole_vertex_positions.len() >= 3 {
+                // Check if hole vertices are consecutive (allowing wrap-around)
+                let mut sorted_positions = hole_vertex_positions.clone();
+                sorted_positions.sort();
+
+                // Check for gaps larger than 1 (accounting for wrap-around)
+                let mut has_large_gap = false;
+                for i in 0..sorted_positions.len() {
+                    let curr = sorted_positions[i];
+                    let next = sorted_positions[(i + 1) % sorted_positions.len()];
+                    let gap = if next > curr {
+                        next - curr
+                    } else {
+                        inner_n - curr + next
+                    };
+                    if gap > 1 && gap < inner_n - 1 {
+                        has_large_gap = true;
+                        break;
+                    }
+                }
+
+                assert!(
+                    !has_large_gap,
+                    "Polygon {} has non-consecutive hole vertices {:?}, indicating it crosses through the hole",
+                    poly_idx, hole_vertex_positions
+                );
+            }
+        }
+
+        // The polygon with hole should produce multiple polygons (triangles or small convex pieces)
+        // NOT one big polygon that wraps around the hole
+        assert!(
+            polygons.len() >= 3,
+            "Pentagon with square hole should produce at least 3 polygons, got {}",
+            polygons.len()
+        );
+
+        // No polygon should have more than 5 vertices (since we're stitching triangles
+        // in an annular region, large polygons indicate incorrect merging)
+        for (i, polygon) in polygons.iter().enumerate() {
+            assert!(
+                polygon.len() <= 5,
+                "Polygon {} has {} vertices, which is too many for an annular region",
+                i,
+                polygon.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_various_regular_polygons() {
+        use std::f64::consts::PI;
+
+        // Test various regular polygons from 3 to 12 sides
+        for n in 3..=12 {
+            let radius = 1.0;
+            let vertices: Vec<DVec2> = (0..n)
+                .map(|i| {
+                    let angle = 2.0 * PI * (i as f64) / (n as f64);
+                    DVec2::new(radius * angle.cos(), radius * angle.sin())
+                })
+                .collect();
+
+            let coords: Vec<f64> = vertices.iter().flat_map(|v| vec![v.x, v.y]).collect();
+            let triangles = earcutr::earcut(&coords, &[], 2).unwrap();
+
+            let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+            // Each convex regular polygon should merge into exactly one polygon
+            assert_eq!(
+                result.len(),
+                1,
+                "Regular {}-gon should produce exactly one polygon",
+                n
+            );
+            assert_eq!(
+                result[0].len(),
+                n,
+                "Regular {}-gon polygon should have exactly {} vertices",
+                n,
+                n
+            );
+        }
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_regular_polygons() {
+        use crate::planar_contour::{Contour, ContourSet, Point, Segment};
+        use std::f64::consts::PI;
+
+        // Test that ContourSet.to_polygon_mesh() works correctly for regular polygons
+        // This covers the bug fix for missing cap geometry on pentagons, heptagons, etc.
+        for n in 3..=10 {
+            let radius = 1.0;
+            let vertices: Vec<DVec2> = (0..n)
+                .map(|i| {
+                    let angle = 2.0 * PI * (i as f64) / (n as f64);
+                    DVec2::new(radius * angle.cos(), radius * angle.sin())
+                })
+                .collect();
+
+            // Create a contour from the vertices
+            let segments: Vec<Segment> = (0..n)
+                .map(|i| {
+                    let start = vertices[i];
+                    let end = vertices[(i + 1) % n];
+                    let tangent = (end - start).normalize();
+                    Segment::new(
+                        Point::new(start, tangent, i as f64),
+                        Point::new(end, tangent, (i + 1) as f64),
+                        i as u32,
+                        false,
+                    )
+                })
+                .collect();
+
+            let contour = Contour::with_segments_closed(segments);
+            let contour_set = ContourSet::with_contours(vec![contour]);
+
+            let mesh = contour_set.to_polygon_mesh();
+            assert!(
+                mesh.is_ok(),
+                "Regular {}-gon should produce a valid mesh",
+                n
+            );
+
+            let mesh = mesh.unwrap();
+            assert_eq!(
+                mesh.vertices.len(),
+                n,
+                "Regular {}-gon should have {} vertices",
+                n,
+                n
+            );
+            assert!(
+                !mesh.polygons.is_empty(),
+                "Regular {}-gon should have at least one polygon",
+                n
+            );
+
+            // Count total vertices used in all polygons
+            let total_vertices_in_polygons: usize =
+                mesh.polygons.iter().map(|p| p.indices.len()).sum();
+
+            // For a convex polygon, all n vertices should be used in a single polygon
+            assert!(
+                total_vertices_in_polygons >= n,
+                "Regular {}-gon polygon should use at least {} vertices, got {}",
+                n,
+                n,
+                total_vertices_in_polygons
+            );
+        }
+    }
+
     // Trait object tests
 
     #[test]
@@ -1784,5 +2166,133 @@ mod tests {
 
         let sampled = result.unwrap();
         assert!(sampled.is_empty());
+    }
+
+    #[test]
+    fn test_contour_set_pentagon_with_square_hole() {
+        use crate::planar_contour::{Contour, ContourSet, Point, Segment};
+        use std::f64::consts::PI;
+
+        // Create a pentagon outline (5 points)
+        let outer_n = 5;
+        let outer_radius = 2.0;
+        let outer_vertices: Vec<DVec2> = (0..outer_n)
+            .map(|i| {
+                let angle = 2.0 * PI * (i as f64) / (outer_n as f64);
+                DVec2::new(outer_radius * angle.cos(), outer_radius * angle.sin())
+            })
+            .collect();
+
+        // Create a square hole (4 points) - must be in CW order (opposite to outer contour)
+        let inner_n = 4;
+        let inner_radius = 0.5;
+        let inner_vertices: Vec<DVec2> = (0..inner_n)
+            .map(|i| {
+                // CW order for hole
+                let angle = -2.0 * PI * (i as f64) / (inner_n as f64);
+                DVec2::new(inner_radius * angle.cos(), inner_radius * angle.sin())
+            })
+            .collect();
+
+        // Create outer contour segments
+        let outer_segments: Vec<Segment> = (0..outer_n)
+            .map(|i| {
+                let start = outer_vertices[i];
+                let end = outer_vertices[(i + 1) % outer_n];
+                let tangent = (end - start).normalize();
+                Segment::new(
+                    Point::new(start, tangent, i as f64),
+                    Point::new(end, tangent, (i + 1) as f64),
+                    i as u32,
+                    false,
+                )
+            })
+            .collect();
+
+        // Create inner contour segments (hole)
+        let inner_segments: Vec<Segment> = (0..inner_n)
+            .map(|i| {
+                let start = inner_vertices[i];
+                let end = inner_vertices[(i + 1) % inner_n];
+                let tangent = (end - start).normalize();
+                Segment::new(
+                    Point::new(start, tangent, i as f64),
+                    Point::new(end, tangent, (i + 1) as f64),
+                    (outer_n + i) as u32,
+                    false,
+                )
+            })
+            .collect();
+
+        let outer_contour = Contour::with_segments_closed(outer_segments);
+        let inner_contour = Contour::with_segments_closed(inner_segments);
+        let contour_set = ContourSet::with_contours(vec![outer_contour, inner_contour]);
+
+        // Test to_polygon_mesh
+        let mesh = contour_set.to_polygon_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Pentagon with square hole should produce a valid mesh"
+        );
+
+        let mesh = mesh.unwrap();
+
+        // Total vertices should be outer + inner = 5 + 4 = 9
+        assert_eq!(
+            mesh.vertices.len(),
+            outer_n + inner_n,
+            "Should have {} vertices (outer {} + inner {})",
+            outer_n + inner_n,
+            outer_n,
+            inner_n
+        );
+
+        // Should have at least one polygon
+        assert!(
+            !mesh.polygons.is_empty(),
+            "Pentagon with square hole should have at least one polygon"
+        );
+
+        // Count total vertices used in all polygons
+        let total_vertices_in_polygons: usize = mesh.polygons.iter().map(|p| p.indices.len()).sum();
+
+        // The triangulation should use all vertices
+        assert!(
+            total_vertices_in_polygons >= outer_n + inner_n,
+            "Should use at least {} vertices in polygons, got {}",
+            outer_n + inner_n,
+            total_vertices_in_polygons
+        );
+
+        // Helper to compute signed area (positive = CCW, negative = CW)
+        fn signed_area(vertices: &[DVec2], indices: &[i32]) -> f64 {
+            let n = indices.len();
+            let mut area = 0.0;
+            for i in 0..n {
+                let p1 = vertices[indices[i] as usize];
+                let p2 = vertices[indices[(i + 1) % n] as usize];
+                area += (p2.x - p1.x) * (p2.y + p1.y);
+            }
+            -area / 2.0 // Negative because we want CCW = positive
+        }
+
+        // Get 2D vertex positions
+        let vertices_2d: Vec<DVec2> = mesh
+            .vertices
+            .iter()
+            .map(|v| DVec2::new(v.position.x, v.position.y))
+            .collect();
+
+        // Verify all polygons have CCW winding (positive signed area)
+        for (i, polygon) in mesh.polygons.iter().enumerate() {
+            let area = signed_area(&vertices_2d, &polygon.indices);
+            assert!(
+                area > 0.0,
+                "Polygon {} with indices {:?} should have CCW winding (positive area), got {}",
+                i,
+                polygon.indices,
+                area
+            );
+        }
     }
 }

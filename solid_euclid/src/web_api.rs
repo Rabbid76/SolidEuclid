@@ -2334,4 +2334,139 @@ mod tests {
         assert!(geometry.is_some());
         assert!(missing.is_none());
     }
+
+    #[test]
+    fn test_create_extrude_triangle_with_chamfer_and_triangle_hole_with_chamfer() {
+        // This test verifies the exact user scenario that was failing:
+        // 3-point outline with chamfer corners + 3-point hole with chamfer corners
+        let chamfer_distance = 0.1;
+        let hole_chamfer_distance = 0.03;
+
+        // Outer triangle (CCW winding) - radius 0.8
+        let outer_radius = 0.8;
+        let outer_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * outer_radius, angle.sin() * outer_radius)
+            })
+            .collect();
+
+        // Inner triangle (CW winding for hole) - radius 0.3
+        let inner_radius = 0.3;
+        let inner_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * inner_radius, angle.sin() * inner_radius)
+            })
+            .collect();
+
+        // Build profile commands
+        let profile = PlanarProfile::with_commands(vec![
+            // Outer triangle
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: outer_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[1],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[2],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[0],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            // Inner triangle (reversed for hole - CW winding)
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: inner_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[2],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[1],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[0],
+                },
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+        ]);
+
+        // Verify profile converts to curve set correctly
+        let curve_set = profile.to_curve_set();
+        assert!(curve_set.is_ok(), "Profile should convert to curve set");
+        let curve_set = curve_set.unwrap();
+
+        // Should have 2 curves (outer + hole)
+        assert_eq!(
+            curve_set.curves.len(),
+            2,
+            "Should have 2 curves (outline + hole)"
+        );
+
+        // Both curves should have 6 segments (3 edges + 3 chamfers)
+        assert_eq!(
+            curve_set.curves[0].segments.len(),
+            6,
+            "Outer triangle with 3 chamfers should have 6 segments"
+        );
+        assert_eq!(
+            curve_set.curves[1].segments.len(),
+            6,
+            "Inner triangle with 3 chamfers should have 6 segments"
+        );
+
+        // Create extrude and mesh
+        let extrude = Extrude::new(profile, 1.0, 0.05, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+
+        // Should have substantial geometry for outline + hole with chamfers
+        assert!(
+            geo.vertex_count() > 20,
+            "Should have many vertices for chamfered triangle with hole"
+        );
+        assert!(
+            geo.triangle_count() > 10,
+            "Should have many triangles for chamfered triangle with hole"
+        );
+    }
 }
