@@ -30,7 +30,7 @@ This is the primary advantage of **NURBS** over standard B-Splines or Bezier cur
 - **Standard B-Splines (Non-Rational):** Can only *approximate* circles and ellipses. They are polynomials, and polynomials cannot exactly describe a perfect circle.
 - **NURBS (Rational):** The "R" stands for **Rational**. By assigning specific **weights** to control points, NURBS can define the ratio of polynomials, which allows them to represent conic sections (circles, ellipses, hyperbolas, parabolas) **exactly**.
 
-#### Capabilities Breakdown:
+#### Capabilities Breakdown
 
 - **Arc:** Yes. A NURBS curve can represent a circular arc exactly.
 - **Ellipse Segment:** Yes.
@@ -80,9 +80,8 @@ A single quadratic Bezier/NURBS span cannot form a full circle (it can't wrap 36
   - The "Corner" points will have weights .
   - The "Midpoint" points (where the circle touches the square) will have weights .
 - **Knot Vector:** Requires specific repeating knots (multiplicity) to join the arcs smoothly ( continuity).
- 
-**4. The Ellipse**
 
+**4. The Ellipse**
 This is mathematically identical to the circle but stretched.
 
 - **Order:** 3 (Degree 2).
