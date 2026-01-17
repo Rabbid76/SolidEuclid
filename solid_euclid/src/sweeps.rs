@@ -897,6 +897,303 @@ impl GeometryModel for ConicalFrustum {
     }
 }
 
+/// Represents an extruded shape created by sweeping a 2D profile along a linear path.
+///
+/// An extrude is created by taking a 2D planar profile and extruding it vertically
+/// along the Y-axis. The extrusion goes from -height/2 to +height/2, centered at the origin.
+///
+/// The extrude supports separate materials for:
+/// - Bottom cap (geometry_id based on profile segment IDs with cap_bottom offset)
+/// - Top cap (geometry_id based on profile segment IDs with cap_top offset)
+/// - Side faces for each profile segment (geometry_id = profile_segment_id)
+///
+/// Profile segments (edges and corners) each get their own geometry_id, allowing
+/// separate materials to be applied to different parts of the extruded shape.
+///
+/// # Example
+/// ```
+/// use solid_euclid::sweeps::Extrude;
+/// use solid_euclid::planar_profile::{PlanarProfile, ProfileCommand, PathCommand, Corner};
+/// use solid_euclid::material::Material;
+/// use glam::DVec2;
+///
+/// // Create a simple square profile
+/// let profile = PlanarProfile::with_commands(vec![
+///     ProfileCommand::new(PathCommand::Move { point: DVec2::new(0.0, 0.0) }, Corner::Edge),
+///     ProfileCommand::new(PathCommand::Line { point: DVec2::new(1.0, 0.0) }, Corner::Edge),
+///     ProfileCommand::new(PathCommand::Line { point: DVec2::new(1.0, 1.0) }, Corner::Edge),
+///     ProfileCommand::new(PathCommand::Line { point: DVec2::new(0.0, 1.0) }, Corner::Edge),
+///     ProfileCommand::new(PathCommand::Line { point: DVec2::new(0.0, 0.0) }, Corner::Edge),
+/// ]);
+///
+/// let extrude = Extrude::new(
+///     profile,
+///     2.0,   // height
+///     0.1,   // sample_distance
+///     Material::Default,
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Extrude {
+    /// The 2D profile to extrude.
+    pub profile: PlanarProfile,
+    /// The total height of the extrusion (from -height/2 to +height/2).
+    pub height: f64,
+    /// The sample distance for sampling the profile curves.
+    pub sample_distance: f64,
+    /// The material assignment for the extrude surfaces.
+    /// - For uniform material: applies to all faces
+    /// - For array material: [body_material, bottom_cap_material, top_cap_material]
+    /// - For map material: profile segment IDs for sides, -1 for bottom cap, -2 for top cap
+    pub material: Material,
+}
+
+/// Geometry ID constants for extrude caps
+const EXTRUDE_BOTTOM_CAP_ID: i32 = -1;
+const EXTRUDE_TOP_CAP_ID: i32 = -2;
+
+impl Extrude {
+    /// Creates a new `Extrude` with the given parameters.
+    ///
+    /// # Arguments
+    /// * `profile` - The 2D profile to extrude
+    /// * `height` - The total height of the extrusion
+    /// * `sample_distance` - The sample distance for profile curves
+    /// * `material` - The material assignment for the surfaces
+    ///
+    /// # Panics
+    /// This function does not panic, but invalid parameters will result in
+    /// errors when generating the mesh.
+    pub fn new(
+        profile: PlanarProfile,
+        height: f64,
+        sample_distance: f64,
+        material: Material,
+    ) -> Self {
+        Self {
+            profile,
+            height,
+            sample_distance,
+            material,
+        }
+    }
+
+    /// Creates the linear extrusion path.
+    ///
+    /// The path is a simple vertical line from (0, -height/2) to (0, +height/2).
+    /// This represents the Y-axis direction for the extrusion.
+    fn create_extrusion_path(&self) -> PlanarProfile {
+        let half_height = self.height / 2.0;
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, -half_height),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, half_height),
+                },
+                Corner::Edge,
+            ),
+        ])
+    }
+
+    /// Creates a `SweepModel` from this extrude using a pre-sampled profile contour.
+    ///
+    /// The sweep model uses:
+    /// - A linear vertical path from -height/2 to +height/2
+    /// - The pre-sampled profile contour as the swept cross-section
+    ///
+    /// # Arguments
+    /// * `profile_contour` - The pre-sampled profile contour
+    ///
+    /// # Returns
+    /// A `SweepModel` that can be used to generate the extrude side geometry
+    fn create_sweep_model_with_contour(
+        &self,
+        profile_contour: ContourSet,
+    ) -> SweepModel<PlanarProfile, ContourSet> {
+        let path = self.create_extrusion_path();
+
+        // Path sample distance should produce a single step for the linear extrusion
+        // Use height * 2 to ensure we only get start and end points
+        let path_sample_distance = self.height * 2.0;
+
+        // Profile sample distance is ignored since ContourSet returns itself
+        SweepModel::new(
+            path,
+            profile_contour,
+            path_sample_distance,
+            self.sample_distance, // This will be ignored by ContourSet::sample_contour
+            self.material.clone(),
+        )
+    }
+
+    /// Generates a cap mesh from the pre-sampled profile contour.
+    ///
+    /// # Arguments
+    /// * `contour_set` - The pre-sampled profile contour
+    /// * `y_position` - The Y coordinate for the cap (negative for bottom, positive for top)
+    /// * `is_bottom` - Whether this is the bottom cap (affects normal direction and winding)
+    ///
+    /// # Returns
+    /// A `PolygonMesh` representing the cap
+    fn generate_cap(
+        contour_set: &ContourSet,
+        y_position: f64,
+        is_bottom: bool,
+    ) -> Result<PolygonMesh, GeometryError> {
+        use glam::DVec3;
+
+        let mut cap_mesh = contour_set.to_polygon_mesh()?;
+
+        let normal_y = if is_bottom { -1.0 } else { 1.0 };
+        let normal = DVec3::new(0.0, normal_y, 0.0);
+        let geometry_id = if is_bottom {
+            EXTRUDE_BOTTOM_CAP_ID
+        } else {
+            EXTRUDE_TOP_CAP_ID
+        };
+
+        // Transform vertices: the ContourSet mesh is in XY plane at Z=0
+        // Profile's X stays as X, Y becomes Z, and the cap is placed at y_position
+        for vertex in &mut cap_mesh.vertices {
+            let x = vertex.position.x;
+            let z = vertex.position.y; // Profile's Y becomes Z
+            vertex.position = DVec3::new(x, y_position, z);
+            vertex.normal = normal;
+        }
+
+        // Update polygon normals and geometry IDs
+        // Reverse winding for bottom cap (normals point down)
+        for polygon in &mut cap_mesh.polygons {
+            if is_bottom {
+                polygon.indices.reverse();
+            }
+            polygon.normal = normal;
+            polygon.geometry_id = geometry_id;
+        }
+
+        Ok(cap_mesh)
+    }
+
+    /// Merges another polygon mesh into the target mesh, offsetting vertex indices.
+    fn merge_mesh(target: &mut PolygonMesh, source: &PolygonMesh) {
+        let vertex_offset = target.vertices.len() as i32;
+
+        // Add all vertices from source
+        target.vertices.extend(source.vertices.clone());
+
+        // Add all polygons with offset indices
+        for polygon in &source.polygons {
+            let offset_indices: Vec<i32> =
+                polygon.indices.iter().map(|&i| i + vertex_offset).collect();
+            target.polygons.push(crate::polygon_mesh::Polygon::new(
+                offset_indices,
+                polygon.normal,
+                polygon.geometry_id,
+            ));
+        }
+
+        // Merge material maps
+        for (geometry_id, material_name) in &source.material_map {
+            target
+                .material_map
+                .insert(*geometry_id, material_name.clone());
+        }
+    }
+}
+
+impl GeometryModel for Extrude {
+    /// Converts the extrude to a polygon mesh.
+    ///
+    /// This method creates:
+    /// 1. Side faces using a `SweepModel` (profile extruded along a linear path)
+    /// 2. Bottom cap at Y = -height/2
+    /// 3. Top cap at Y = +height/2
+    ///
+    /// The profile is sampled once and reused for both the sweep model and the caps.
+    ///
+    /// The geometry IDs are assigned as:
+    /// - Side faces: profile segment ID (0, 1, 2, etc. for each profile segment)
+    /// - Bottom cap: EXTRUDE_BOTTOM_CAP_ID (-1)
+    /// - Top cap: EXTRUDE_TOP_CAP_ID (-2)
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the extrude,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The height is invalid (zero or negative)
+    /// - The sample distance is invalid (zero or negative)
+    /// - The profile is invalid or cannot be sampled
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Validate parameters
+        if self.height <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "height".to_string(),
+                message: "Height must be positive".to_string(),
+            });
+        }
+        if self.sample_distance <= 0.0 {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "sample_distance".to_string(),
+                message: "Sample distance must be positive".to_string(),
+            });
+        }
+        if self.profile.is_empty() {
+            return Err(GeometryError::InvalidParameter {
+                parameter: "profile".to_string(),
+                message: "Profile cannot be empty".to_string(),
+            });
+        }
+
+        // Sample the profile once and reuse for sweep model and caps
+        let profile_contour = self.profile.sample_contour(self.sample_distance)?;
+
+        // Generate side faces using sweep model with pre-sampled contour
+        let sweep_model = self.create_sweep_model_with_contour(profile_contour.clone());
+        let mut mesh = sweep_model.to_polygon_mesh()?;
+
+        // Remap geometry IDs for side faces: extract just the profile segment ID
+        // The sweep model encodes: (path_segment << 16) | profile_segment
+        // Since our path has only 1 segment (id=0), we just need the profile segment
+        for polygon in &mut mesh.polygons {
+            let profile_segment = polygon.geometry_id & 0xFFFF;
+            polygon.geometry_id = profile_segment;
+        }
+
+        let half_height = self.height / 2.0;
+
+        // Generate and merge bottom cap using the same sampled contour
+        let bottom_cap = Self::generate_cap(&profile_contour, -half_height, true)?;
+        Self::merge_mesh(&mut mesh, &bottom_cap);
+
+        // Generate and merge top cap using the same sampled contour
+        let top_cap = Self::generate_cap(&profile_contour, half_height, false)?;
+        Self::merge_mesh(&mut mesh, &top_cap);
+
+        // Apply material mapping
+        // Get all unique geometry IDs from the mesh
+        let mut geometry_ids: Vec<i32> = mesh.polygons.iter().map(|p| p.geometry_id).collect();
+        geometry_ids.sort();
+        geometry_ids.dedup();
+
+        let total_faces = geometry_ids.len() as i32;
+        for geometry_id in geometry_ids {
+            let material_name = self
+                .material
+                .get_material_for_face(geometry_id, total_faces);
+            mesh.set_material(geometry_id, material_name);
+        }
+
+        Ok(mesh)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2681,5 +2978,759 @@ mod tests {
             1,
             "Expected 1 material region with Uniform"
         );
+    }
+
+    // ============================================================================
+    // Extrude tests
+    // ============================================================================
+
+    #[test]
+    fn test_extrude_new() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile.clone(), 2.0, 0.1, Material::Default);
+
+        assert_eq!(extrude.profile, profile);
+        assert_eq!(extrude.height, 2.0);
+        assert_eq!(extrude.sample_distance, 0.1);
+        assert_eq!(extrude.material, Material::Default);
+    }
+
+    #[test]
+    fn test_extrude_square_to_polygon_mesh() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+
+        let mesh = extrude.to_polygon_mesh();
+        assert!(mesh.is_ok(), "Mesh creation failed: {:?}", mesh.err());
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty(), "Mesh should have vertices");
+        assert!(!mesh.polygons.is_empty(), "Mesh should have polygons");
+    }
+
+    #[test]
+    fn test_extrude_height_bounds() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let height = 4.0;
+        let extrude = Extrude::new(profile, height, 0.1, Material::Default);
+
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Check that vertices span from -height/2 to +height/2
+        let min_y = mesh
+            .vertices
+            .iter()
+            .map(|v| v.position.y)
+            .fold(f64::INFINITY, f64::min);
+        let max_y = mesh
+            .vertices
+            .iter()
+            .map(|v| v.position.y)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let half_height = height / 2.0;
+        assert!(
+            (min_y - (-half_height)).abs() < 1e-10,
+            "Minimum Y should be -height/2, got {}",
+            min_y
+        );
+        assert!(
+            (max_y - half_height).abs() < 1e-10,
+            "Maximum Y should be +height/2, got {}",
+            max_y
+        );
+    }
+
+    #[test]
+    fn test_extrude_invalid_height() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile.clone(), 0.0, 0.1, Material::Default);
+        assert!(
+            extrude.to_polygon_mesh().is_err(),
+            "Zero height should fail"
+        );
+
+        let extrude = Extrude::new(profile.clone(), -1.0, 0.1, Material::Default);
+        assert!(
+            extrude.to_polygon_mesh().is_err(),
+            "Negative height should fail"
+        );
+    }
+
+    #[test]
+    fn test_extrude_invalid_sample_distance() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile.clone(), 1.0, 0.0, Material::Default);
+        assert!(
+            extrude.to_polygon_mesh().is_err(),
+            "Zero sample distance should fail"
+        );
+
+        let extrude = Extrude::new(profile.clone(), 1.0, -0.1, Material::Default);
+        assert!(
+            extrude.to_polygon_mesh().is_err(),
+            "Negative sample distance should fail"
+        );
+    }
+
+    #[test]
+    fn test_extrude_empty_profile() {
+        let profile = PlanarProfile::new();
+        let extrude = Extrude::new(profile, 1.0, 0.1, Material::Default);
+        assert!(
+            extrude.to_polygon_mesh().is_err(),
+            "Empty profile should fail"
+        );
+    }
+
+    #[test]
+    fn test_extrude_with_fillet_corners() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.05, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Mesh creation with fillets failed: {:?}",
+            mesh.err()
+        );
+        let mesh = mesh.unwrap();
+
+        // With fillets, we should have more vertices than a simple square extrusion
+        assert!(
+            mesh.vertices.len() > 8,
+            "Filleted extrude should have more than 8 vertices"
+        );
+    }
+
+    #[test]
+    fn test_extrude_with_chamfer_corners() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(
+            mesh.is_ok(),
+            "Mesh creation with chamfers failed: {:?}",
+            mesh.err()
+        );
+        let mesh = mesh.unwrap();
+
+        // With chamfers, we should have more vertices than a simple square extrusion
+        assert!(
+            mesh.vertices.len() > 8,
+            "Chamfered extrude should have more than 8 vertices"
+        );
+    }
+
+    #[test]
+    fn test_extrude_uniform_material() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(
+            profile,
+            2.0,
+            0.1,
+            Material::Uniform("test_material".to_string()),
+        );
+
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // All materials should be "test_material"
+        for (_, material) in &mesh.material_map {
+            assert_eq!(material, "test_material");
+        }
+    }
+
+    #[test]
+    fn test_extrude_cap_geometry_ids() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Check that bottom cap has geometry_id = -1 and top cap has geometry_id = -2
+        let bottom_cap_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+            .collect();
+        let top_cap_polygons: Vec<_> = mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+            .collect();
+
+        assert!(
+            !bottom_cap_polygons.is_empty(),
+            "Should have bottom cap polygons"
+        );
+        assert!(!top_cap_polygons.is_empty(), "Should have top cap polygons");
+    }
+
+    #[test]
+    fn test_extrude_cap_normals() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Check bottom cap normals point down (negative Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_BOTTOM_CAP_ID)
+        {
+            assert!(
+                polygon.normal.y < -0.9,
+                "Bottom cap normal should point down, got {:?}",
+                polygon.normal
+            );
+        }
+
+        // Check top cap normals point up (positive Y)
+        for polygon in mesh
+            .polygons
+            .iter()
+            .filter(|p| p.geometry_id == EXTRUDE_TOP_CAP_ID)
+        {
+            assert!(
+                polygon.normal.y > 0.9,
+                "Top cap normal should point up, got {:?}",
+                polygon.normal
+            );
+        }
+    }
+
+    #[test]
+    fn test_extrude_triangle_profile() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(mesh.is_ok(), "Triangle extrude should succeed");
+        let mesh = mesh.unwrap();
+
+        // Should have side faces plus top and bottom caps
+        assert!(!mesh.polygons.is_empty(), "Should have polygons");
+    }
+
+    #[test]
+    fn test_extrude_circle_profile() {
+        let center = DVec2::new(0.0, 0.0);
+        let radius = 1.0;
+        let start = DVec2::new(radius, 0.0);
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(PathCommand::Move { point: start }, Corner::Edge),
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: start,
+                    center,
+                },
+                Corner::SmoothEdge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = extrude.to_polygon_mesh();
+
+        assert!(mesh.is_ok(), "Circle extrude should succeed");
+        let mesh = mesh.unwrap();
+
+        assert!(!mesh.vertices.is_empty(), "Should have vertices");
+        assert!(!mesh.polygons.is_empty(), "Should have polygons");
+    }
+
+    #[test]
+    fn test_extrude_to_triangular_mesh() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("test".to_string()));
+
+        let mesh = extrude.to_triangular_mesh();
+        assert!(
+            mesh.is_ok(),
+            "Triangular mesh creation failed: {:?}",
+            mesh.err()
+        );
+
+        let mesh = mesh.unwrap();
+        assert_eq!(
+            mesh.geometries.len(),
+            1,
+            "Expected 1 material region with Uniform"
+        );
+    }
+
+    #[test]
+    fn test_extrude_material_map() {
+        use std::collections::HashMap;
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mut face_map = HashMap::new();
+        face_map.insert(EXTRUDE_BOTTOM_CAP_ID, "bottom_material".to_string());
+        face_map.insert(EXTRUDE_TOP_CAP_ID, "top_material".to_string());
+        face_map.insert(0, "side_material".to_string());
+
+        let extrude = Extrude::new(
+            profile,
+            2.0,
+            0.1,
+            Material::Map {
+                default: "default".to_string(),
+                face_map,
+            },
+        );
+
+        let mesh = extrude.to_polygon_mesh().unwrap();
+
+        // Check that the material map was applied correctly
+        assert_eq!(
+            mesh.material_map.get(&EXTRUDE_BOTTOM_CAP_ID),
+            Some(&"bottom_material".to_string())
+        );
+        assert_eq!(
+            mesh.material_map.get(&EXTRUDE_TOP_CAP_ID),
+            Some(&"top_material".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extrude_serialization() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+
+        // Test serialization
+        let serialized = serde_json::to_string(&extrude);
+        assert!(serialized.is_ok(), "Serialization should succeed");
+
+        // Test deserialization
+        let deserialized: Result<Extrude, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "Deserialization should succeed");
+
+        let deserialized = deserialized.unwrap();
+        assert_eq!(deserialized.height, 2.0);
+        assert_eq!(deserialized.sample_distance, 0.1);
     }
 }

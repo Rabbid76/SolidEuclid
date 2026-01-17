@@ -1,5 +1,10 @@
 use crate::geometry_error::GeometryError;
-use glam::DVec2;
+use crate::geometry_model::GeometryModel;
+use crate::polygon_mesh::{Polygon, PolygonMesh};
+use crate::triangular_mesh::{TriangularGeometry, TriangularMesh};
+use crate::vertex::Vertex;
+use glam::{DVec2, DVec3};
+use std::collections::HashMap;
 
 /// Represents a point on a planar contour with position and tangent information.
 ///
@@ -229,6 +234,415 @@ pub trait SampleContour {
     /// A `Result` containing the `ContourSet` representation,
     /// or a `GeometryError` if the sampling fails.
     fn sample_contour(&self, sample_distance: f64) -> Result<ContourSet, GeometryError>;
+}
+
+impl SampleContour for ContourSet {
+    /// Returns a clone of this `ContourSet`.
+    ///
+    /// Since `ContourSet` is already a sampled representation, this method
+    /// simply returns a clone of itself, ignoring the sample_distance parameter.
+    /// This allows `ContourSet` to be used directly with APIs that expect
+    /// a `SampleContour` implementation, such as `SweepModel`.
+    ///
+    /// # Arguments
+    /// * `_sample_distance` - Ignored, as the contour is already sampled
+    ///
+    /// # Returns
+    /// A clone of this `ContourSet`
+    fn sample_contour(&self, _sample_distance: f64) -> Result<ContourSet, GeometryError> {
+        Ok(self.clone())
+    }
+}
+
+/// A helper struct representing an edge in the triangulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Edge {
+    /// The smaller vertex index.
+    v0: usize,
+    /// The larger vertex index.
+    v1: usize,
+}
+
+impl Edge {
+    /// Creates a new edge with sorted vertex indices.
+    fn new(a: usize, b: usize) -> Self {
+        if a < b {
+            Self { v0: a, v1: b }
+        } else {
+            Self { v0: b, v1: a }
+        }
+    }
+}
+
+/// A helper struct representing a polygon during the stitch algorithm.
+#[derive(Debug, Clone)]
+struct StitchPolygon {
+    /// The ordered vertex indices of the polygon (CCW order).
+    indices: Vec<usize>,
+    /// The polygon's ID (used for union-find during merging).
+    id: usize,
+}
+
+impl StitchPolygon {
+    /// Creates a new polygon from triangle indices.
+    fn from_triangle(indices: [usize; 3], id: usize) -> Self {
+        Self {
+            indices: indices.to_vec(),
+            id,
+        }
+    }
+
+    /// Returns the index position of vertex v in this polygon.
+    fn position_of(&self, v: usize) -> Option<usize> {
+        self.indices.iter().position(|&x| x == v)
+    }
+
+    /// Returns the vertex before v in the polygon (wrapping around).
+    fn vertex_before(&self, v: usize) -> Option<usize> {
+        let pos = self.position_of(v)?;
+        let n = self.indices.len();
+        Some(self.indices[(pos + n - 1) % n])
+    }
+
+    /// Returns the vertex after v in the polygon (wrapping around).
+    fn vertex_after(&self, v: usize) -> Option<usize> {
+        let pos = self.position_of(v)?;
+        let n = self.indices.len();
+        Some(self.indices[(pos + 1) % n])
+    }
+}
+
+/// Checks if the angle at the middle point is convex (for CCW polygons).
+///
+/// Returns true if the turn from prev -> current -> next is a left turn or straight.
+fn is_convex_angle(prev: DVec2, current: DVec2, next: DVec2) -> bool {
+    let v1 = current - prev;
+    let v2 = next - current;
+    // 2D cross product: positive means left turn (convex for CCW), negative means right turn (reflex)
+    let cross = v1.x * v2.y - v1.y * v2.x;
+    cross >= -1e-10 // Allow small tolerance for numerical precision
+}
+
+/// Merges two polygons that share an edge, removing the shared edge.
+///
+/// The resulting polygon contains the vertices from both polygons in CCW order,
+/// with the shared edge vertices included once each.
+fn merge_polygons(
+    poly_a: &StitchPolygon,
+    poly_b: &StitchPolygon,
+    edge_v0: usize,
+    edge_v1: usize,
+) -> StitchPolygon {
+    // Find positions of shared vertices in both polygons
+    let _pos_v0_a = poly_a.position_of(edge_v0).unwrap();
+    let pos_v1_a = poly_a.position_of(edge_v1).unwrap();
+    let pos_v0_b = poly_b.position_of(edge_v0).unwrap();
+    let _pos_v1_b = poly_b.position_of(edge_v1).unwrap();
+
+    let n_a = poly_a.indices.len();
+    let n_b = poly_b.indices.len();
+
+    // Determine the correct traversal order
+    // In CCW order, if v0 -> v1 is an edge in poly_a, then in poly_b it should be v1 -> v0
+    let mut result = Vec::new();
+
+    // Start from the vertex after v1 in poly_a and traverse to v0
+    let mut i = (pos_v1_a + 1) % n_a;
+    while poly_a.indices[i] != edge_v0 {
+        result.push(poly_a.indices[i]);
+        i = (i + 1) % n_a;
+    }
+    result.push(edge_v0);
+
+    // Continue from the vertex after v0 in poly_b to v1
+    let mut j = (pos_v0_b + 1) % n_b;
+    while poly_b.indices[j] != edge_v1 {
+        result.push(poly_b.indices[j]);
+        j = (j + 1) % n_b;
+    }
+    result.push(edge_v1);
+
+    StitchPolygon {
+        indices: result,
+        id: poly_a.id,
+    }
+}
+
+/// Implements the Hertel-Mehlhorn stitch algorithm.
+///
+/// This algorithm takes a triangulation and merges triangles into larger convex polygons
+/// by removing "inessential" diagonals (edges shared by two triangles where removal
+/// maintains convexity).
+fn hertel_mehlhorn_stitch(triangles: &[usize], vertices: &[DVec2]) -> Vec<Vec<usize>> {
+    if triangles.is_empty() {
+        return Vec::new();
+    }
+
+    let num_triangles = triangles.len() / 3;
+
+    // Create initial polygons from triangles
+    let mut polygons: Vec<Option<StitchPolygon>> = (0..num_triangles)
+        .map(|i| {
+            let t = [triangles[i * 3], triangles[i * 3 + 1], triangles[i * 3 + 2]];
+            Some(StitchPolygon::from_triangle(t, i))
+        })
+        .collect();
+
+    // Build edge -> polygon mapping
+    // An edge maps to a list of polygon IDs that contain it
+    let mut edge_to_polygons: HashMap<Edge, Vec<usize>> = HashMap::new();
+
+    for (poly_idx, poly_opt) in polygons.iter().enumerate() {
+        if let Some(poly) = poly_opt {
+            let n = poly.indices.len();
+            for i in 0..n {
+                let edge = Edge::new(poly.indices[i], poly.indices[(i + 1) % n]);
+                edge_to_polygons.entry(edge).or_default().push(poly_idx);
+            }
+        }
+    }
+
+    // Union-find parent array to track merged polygons
+    let mut parent: Vec<usize> = (0..num_triangles).collect();
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            parent[x] = find(parent, parent[x]);
+        }
+        parent[x]
+    }
+
+    // Process internal edges (edges shared by exactly 2 polygons)
+    let internal_edges: Vec<Edge> = edge_to_polygons
+        .iter()
+        .filter(|(_, polys)| polys.len() == 2)
+        .map(|(edge, _)| *edge)
+        .collect();
+
+    for edge in internal_edges {
+        let poly_ids = &edge_to_polygons[&edge];
+        if poly_ids.len() != 2 {
+            continue;
+        }
+
+        let root_a = find(&mut parent, poly_ids[0]);
+        let root_b = find(&mut parent, poly_ids[1]);
+
+        // If already the same polygon, skip
+        if root_a == root_b {
+            continue;
+        }
+
+        let poly_a = match &polygons[root_a] {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let poly_b = match &polygons[root_b] {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        // Check if both vertices of the edge exist in both polygons
+        if poly_a.position_of(edge.v0).is_none()
+            || poly_a.position_of(edge.v1).is_none()
+            || poly_b.position_of(edge.v0).is_none()
+            || poly_b.position_of(edge.v1).is_none()
+        {
+            continue;
+        }
+
+        // Get the vertices adjacent to the shared edge vertices
+        let pre_v0_a = poly_a.vertex_before(edge.v0);
+        let post_v0_b = poly_b.vertex_after(edge.v0);
+        let pre_v1_b = poly_b.vertex_before(edge.v1);
+        let post_v1_a = poly_a.vertex_after(edge.v1);
+
+        // Check convexity at both endpoints of the shared edge
+        let can_merge = match (pre_v0_a, post_v0_b, pre_v1_b, post_v1_a) {
+            (Some(pre_v0), Some(post_v0), Some(pre_v1), Some(post_v1)) => {
+                // For the merged polygon:
+                // At v0: check angle from pre_v0_a -> v0 -> post_v0_b
+                // At v1: check angle from pre_v1_b -> v1 -> post_v1_a
+                let angle_v0_convex =
+                    is_convex_angle(vertices[pre_v0], vertices[edge.v0], vertices[post_v0]);
+                let angle_v1_convex =
+                    is_convex_angle(vertices[pre_v1], vertices[edge.v1], vertices[post_v1]);
+                angle_v0_convex && angle_v1_convex
+            }
+            _ => false,
+        };
+
+        if can_merge {
+            // Merge the polygons
+            let merged = merge_polygons(&poly_a, &poly_b, edge.v0, edge.v1);
+
+            // Update union-find
+            parent[root_b] = root_a;
+
+            // Update polygon storage
+            polygons[root_a] = Some(merged);
+            polygons[root_b] = None;
+        }
+    }
+
+    // Collect final polygons
+    polygons
+        .into_iter()
+        .filter_map(|p| p.map(|poly| poly.indices))
+        .collect()
+}
+
+impl ContourSet {
+    /// Extracts unique vertices from the contours, returning positions and hole indices.
+    ///
+    /// This converts the contour set into a format suitable for the earcut algorithm.
+    fn to_earcut_format(&self) -> (Vec<f64>, Vec<usize>) {
+        let mut coords: Vec<f64> = Vec::new();
+        let mut hole_indices: Vec<usize> = Vec::new();
+        let mut vertex_count = 0;
+
+        for (contour_idx, contour) in self.contours.iter().enumerate() {
+            if contour.segments.is_empty() {
+                continue;
+            }
+
+            // Mark holes (all contours after the first are considered holes)
+            if contour_idx > 0 {
+                hole_indices.push(vertex_count);
+            }
+
+            // Add segment start points (avoiding duplicates at the end of closed contours)
+            for segment in &contour.segments {
+                coords.push(segment.start.position.x);
+                coords.push(segment.start.position.y);
+                vertex_count += 1;
+            }
+        }
+
+        (coords, hole_indices)
+    }
+
+    /// Extracts unique 2D vertices from the contours.
+    fn extract_vertices_2d(&self) -> Vec<DVec2> {
+        let mut vertices = Vec::new();
+
+        for contour in &self.contours {
+            for segment in &contour.segments {
+                vertices.push(segment.start.position);
+            }
+        }
+
+        vertices
+    }
+
+    /// Triangulates the contour set using the earcut algorithm.
+    ///
+    /// Returns a vector of triangle indices.
+    fn triangulate(&self) -> Result<Vec<usize>, GeometryError> {
+        let (coords, hole_indices) = self.to_earcut_format();
+
+        if coords.len() < 6 {
+            // Need at least 3 vertices (6 coordinates)
+            return Err(GeometryError::InsufficientVertices {
+                required: 3,
+                provided: coords.len() / 2,
+            });
+        }
+
+        let triangles = earcutr::earcut(&coords, &hole_indices, 2).map_err(|e| {
+            GeometryError::InvalidParameter {
+                parameter: "contours".to_string(),
+                message: format!("Earcut triangulation failed: {:?}", e),
+            }
+        })?;
+
+        Ok(triangles)
+    }
+}
+
+impl GeometryModel for ContourSet {
+    /// Converts the contour set to a polygon mesh using the Hertel-Mehlhorn stitch algorithm.
+    ///
+    /// This first triangulates the contours using earcut, then merges triangles into
+    /// larger convex polygons where possible.
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        if self.is_empty() {
+            return Ok(PolygonMesh::new());
+        }
+
+        let triangles = self.triangulate()?;
+        let vertices_2d = self.extract_vertices_2d();
+
+        if triangles.is_empty() {
+            return Ok(PolygonMesh::new());
+        }
+
+        // Apply Hertel-Mehlhorn stitch algorithm
+        let convex_polygons = hertel_mehlhorn_stitch(&triangles, &vertices_2d);
+
+        // Create the polygon mesh
+        let mut mesh = PolygonMesh::new();
+
+        // Add vertices (2D positions become XY, Z=0)
+        for v2d in &vertices_2d {
+            let vertex = Vertex::new(
+                DVec3::new(v2d.x, v2d.y, 0.0),
+                DVec3::Z, // Normal pointing up
+                *v2d,     // UV is same as 2D position
+            );
+            mesh.add_vertex(vertex);
+        }
+
+        // Add polygons
+        for polygon_indices in convex_polygons {
+            if polygon_indices.len() >= 3 {
+                let indices: Vec<i32> = polygon_indices.iter().map(|&i| i as i32).collect();
+                let polygon = Polygon::new(indices, DVec3::Z, 0);
+                mesh.add_polygon(polygon);
+            }
+        }
+
+        mesh.set_material(0, "contour_material".to_string());
+
+        Ok(mesh)
+    }
+
+    /// Converts the contour set to a triangular mesh directly using earcut.
+    ///
+    /// This is more efficient than going through the polygon mesh for rendering purposes.
+    fn to_triangular_mesh(&self) -> Result<TriangularMesh, GeometryError> {
+        if self.is_empty() {
+            return Ok(TriangularMesh::new());
+        }
+
+        let triangles = self.triangulate()?;
+        let vertices_2d = self.extract_vertices_2d();
+
+        if triangles.is_empty() {
+            return Ok(TriangularMesh::new());
+        }
+
+        let mut geometry = TriangularGeometry::new();
+
+        // Add vertices
+        for v2d in &vertices_2d {
+            geometry.add_vertex(
+                [v2d.x as f32, v2d.y as f32, 0.0],
+                [0.0, 0.0, 1.0], // Normal pointing up
+                [v2d.x as f32, v2d.y as f32],
+            );
+        }
+
+        // Add triangle indices
+        for &idx in &triangles {
+            geometry.indices.push(idx as i32);
+        }
+
+        let mut mesh = TriangularMesh::new();
+        mesh.insert("contour_material".to_string(), geometry);
+
+        Ok(mesh)
+    }
 }
 
 #[cfg(test)]
@@ -744,5 +1158,631 @@ mod tests {
 
         let result = rect.sample_contour(1.0);
         assert!(result.is_ok());
+    }
+
+    // Helper function to create a simple closed contour from 2D points
+    fn create_contour_from_points(points: &[DVec2]) -> Contour {
+        let mut segments = Vec::new();
+        let n = points.len();
+
+        for i in 0..n {
+            let start_pos = points[i];
+            let end_pos = points[(i + 1) % n];
+            let tangent = (end_pos - start_pos).normalize_or_zero();
+
+            segments.push(Segment::new(
+                Point::new(start_pos, tangent, i as f64),
+                Point::new(end_pos, tangent, (i + 1) as f64),
+                i as u32,
+                true,
+            ));
+        }
+
+        Contour::with_segments_closed(segments)
+    }
+
+    // Edge tests
+
+    #[test]
+    fn test_edge_creation_sorted() {
+        let edge1 = Edge::new(3, 7);
+        assert_eq!(edge1.v0, 3);
+        assert_eq!(edge1.v1, 7);
+
+        let edge2 = Edge::new(7, 3);
+        assert_eq!(edge2.v0, 3);
+        assert_eq!(edge2.v1, 7);
+    }
+
+    #[test]
+    fn test_edge_equality() {
+        let edge1 = Edge::new(1, 5);
+        let edge2 = Edge::new(5, 1);
+        let edge3 = Edge::new(1, 6);
+
+        assert_eq!(edge1, edge2);
+        assert_ne!(edge1, edge3);
+    }
+
+    // is_convex_angle tests
+
+    #[test]
+    fn test_is_convex_angle_left_turn() {
+        // Left turn (convex for CCW polygon)
+        let prev = DVec2::new(0.0, 0.0);
+        let current = DVec2::new(1.0, 0.0);
+        let next = DVec2::new(1.0, 1.0);
+
+        assert!(is_convex_angle(prev, current, next));
+    }
+
+    #[test]
+    fn test_is_convex_angle_right_turn() {
+        // Right turn (reflex for CCW polygon)
+        let prev = DVec2::new(0.0, 0.0);
+        let current = DVec2::new(1.0, 0.0);
+        let next = DVec2::new(1.0, -1.0);
+
+        assert!(!is_convex_angle(prev, current, next));
+    }
+
+    #[test]
+    fn test_is_convex_angle_straight() {
+        // Straight line (considered convex)
+        let prev = DVec2::new(0.0, 0.0);
+        let current = DVec2::new(1.0, 0.0);
+        let next = DVec2::new(2.0, 0.0);
+
+        assert!(is_convex_angle(prev, current, next));
+    }
+
+    // StitchPolygon tests
+
+    #[test]
+    fn test_stitch_polygon_from_triangle() {
+        let poly = StitchPolygon::from_triangle([0, 1, 2], 5);
+
+        assert_eq!(poly.indices, vec![0, 1, 2]);
+        assert_eq!(poly.id, 5);
+    }
+
+    #[test]
+    fn test_stitch_polygon_position_of() {
+        let poly = StitchPolygon::from_triangle([3, 7, 11], 0);
+
+        assert_eq!(poly.position_of(3), Some(0));
+        assert_eq!(poly.position_of(7), Some(1));
+        assert_eq!(poly.position_of(11), Some(2));
+        assert_eq!(poly.position_of(5), None);
+    }
+
+    #[test]
+    fn test_stitch_polygon_vertex_before_after() {
+        let poly = StitchPolygon::from_triangle([0, 1, 2], 0);
+
+        // Test vertex_before
+        assert_eq!(poly.vertex_before(0), Some(2)); // wraps around
+        assert_eq!(poly.vertex_before(1), Some(0));
+        assert_eq!(poly.vertex_before(2), Some(1));
+
+        // Test vertex_after
+        assert_eq!(poly.vertex_after(0), Some(1));
+        assert_eq!(poly.vertex_after(1), Some(2));
+        assert_eq!(poly.vertex_after(2), Some(0)); // wraps around
+    }
+
+    // ContourSet triangulation tests
+
+    #[test]
+    fn test_contour_set_to_earcut_format_simple_triangle() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let (coords, holes) = contour_set.to_earcut_format();
+
+        assert_eq!(coords.len(), 6); // 3 vertices * 2 coords
+        assert!(holes.is_empty()); // No holes
+        assert_eq!(coords[0], 0.0); // x of first point
+        assert_eq!(coords[1], 0.0); // y of first point
+    }
+
+    #[test]
+    fn test_contour_set_to_earcut_format_with_hole() {
+        // Outer square
+        let outer_points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4.0, 0.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(0.0, 4.0),
+        ];
+        let outer_contour = create_contour_from_points(&outer_points);
+
+        // Inner square (hole)
+        let inner_points = vec![
+            DVec2::new(1.0, 1.0),
+            DVec2::new(3.0, 1.0),
+            DVec2::new(3.0, 3.0),
+            DVec2::new(1.0, 3.0),
+        ];
+        let inner_contour = create_contour_from_points(&inner_points);
+
+        let contour_set = ContourSet::with_contours(vec![outer_contour, inner_contour]);
+
+        let (coords, holes) = contour_set.to_earcut_format();
+
+        assert_eq!(coords.len(), 16); // 8 vertices * 2 coords
+        assert_eq!(holes.len(), 1); // One hole
+        assert_eq!(holes[0], 4); // Hole starts at vertex index 4
+    }
+
+    #[test]
+    fn test_contour_set_triangulate_simple_square() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(0.0, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let result = contour_set.triangulate();
+        assert!(result.is_ok());
+
+        let triangles = result.unwrap();
+        // A square should be triangulated into 2 triangles (6 indices)
+        assert_eq!(triangles.len(), 6);
+    }
+
+    #[test]
+    fn test_contour_set_triangulate_empty() {
+        let contour_set = ContourSet::new();
+
+        let result = contour_set.triangulate();
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            GeometryError::InsufficientVertices { required, provided } => {
+                assert_eq!(required, 3);
+                assert_eq!(provided, 0);
+            }
+            _ => panic!("Expected InsufficientVertices error"),
+        }
+    }
+
+    // GeometryModel implementation tests
+
+    #[test]
+    fn test_contour_set_to_triangular_mesh_simple_triangle() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let result = contour_set.to_triangular_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert_eq!(mesh.len(), 1);
+
+        let geometry = mesh.get("contour_material").unwrap();
+        assert_eq!(geometry.vertex_count(), 3);
+        assert_eq!(geometry.indices.len(), 3); // 1 triangle
+    }
+
+    #[test]
+    fn test_contour_set_to_triangular_mesh_square() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(2.0, 2.0),
+            DVec2::new(0.0, 2.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let result = contour_set.to_triangular_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        let geometry = mesh.get("contour_material").unwrap();
+        assert_eq!(geometry.vertex_count(), 4);
+        assert_eq!(geometry.indices.len(), 6); // 2 triangles
+    }
+
+    #[test]
+    fn test_contour_set_to_triangular_mesh_empty() {
+        let contour_set = ContourSet::new();
+
+        let result = contour_set.to_triangular_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert!(mesh.is_empty());
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_simple_square() {
+        // A simple convex square should result in a single polygon after stitching
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(2.0, 2.0),
+            DVec2::new(0.0, 2.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let result = contour_set.to_polygon_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert_eq!(mesh.vertex_count(), 4);
+        // After stitching, a square's 2 triangles should merge into 1 quad (if they can)
+        // The result depends on the triangulation order
+        assert!(mesh.polygon_count() >= 1);
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_empty() {
+        let contour_set = ContourSet::new();
+
+        let result = contour_set.to_polygon_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert!(mesh.is_empty());
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_concave_l_shape() {
+        // L-shaped concave polygon
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(2.0, 0.0),
+            DVec2::new(2.0, 1.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, 2.0),
+            DVec2::new(0.0, 2.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let result = contour_set.to_polygon_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert_eq!(mesh.vertex_count(), 6);
+        // An L-shape will have multiple triangles that may partially merge
+        assert!(mesh.polygon_count() >= 1);
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_with_hole() {
+        // Outer square
+        let outer_points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4.0, 0.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(0.0, 4.0),
+        ];
+        let outer_contour = create_contour_from_points(&outer_points);
+
+        // Inner square (hole) - note: holes should be wound opposite direction
+        // For earcut, holes should be clockwise if outer is counter-clockwise
+        let inner_points = vec![
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, 3.0),
+            DVec2::new(3.0, 3.0),
+            DVec2::new(3.0, 1.0),
+        ];
+        let inner_contour = create_contour_from_points(&inner_points);
+
+        let contour_set = ContourSet::with_contours(vec![outer_contour, inner_contour]);
+
+        let result = contour_set.to_polygon_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        assert_eq!(mesh.vertex_count(), 8);
+        // With a hole, we should have multiple polygons
+        assert!(mesh.polygon_count() >= 1);
+    }
+
+    #[test]
+    fn test_contour_set_to_triangular_mesh_with_hole() {
+        // Outer square
+        let outer_points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(4.0, 0.0),
+            DVec2::new(4.0, 4.0),
+            DVec2::new(0.0, 4.0),
+        ];
+        let outer_contour = create_contour_from_points(&outer_points);
+
+        // Inner square (hole)
+        let inner_points = vec![
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, 3.0),
+            DVec2::new(3.0, 3.0),
+            DVec2::new(3.0, 1.0),
+        ];
+        let inner_contour = create_contour_from_points(&inner_points);
+
+        let contour_set = ContourSet::with_contours(vec![outer_contour, inner_contour]);
+
+        let result = contour_set.to_triangular_mesh();
+        assert!(result.is_ok());
+
+        let mesh = result.unwrap();
+        let geometry = mesh.get("contour_material").unwrap();
+        assert_eq!(geometry.vertex_count(), 8);
+        // Multiple triangles needed to fill the area with hole
+        assert!(geometry.indices.len() >= 9); // At least 3 triangles
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_material_set() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let mesh = contour_set.to_polygon_mesh().unwrap();
+
+        assert!(mesh.get_material(0).is_some());
+        assert_eq!(mesh.get_material(0).unwrap(), "contour_material");
+    }
+
+    #[test]
+    fn test_contour_set_to_polygon_mesh_vertex_normals() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let mesh = contour_set.to_polygon_mesh().unwrap();
+
+        // All normals should point in Z direction
+        for vertex in &mesh.vertices {
+            assert_eq!(vertex.normal, DVec3::Z);
+        }
+    }
+
+    #[test]
+    fn test_contour_set_to_triangular_mesh_vertex_positions() {
+        let points = vec![
+            DVec2::new(1.0, 2.0),
+            DVec2::new(3.0, 2.0),
+            DVec2::new(2.0, 4.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let mesh = contour_set.to_triangular_mesh().unwrap();
+        let geometry = mesh.get("contour_material").unwrap();
+
+        // Check that vertex positions are correct (converted from 2D to 3D with z=0)
+        assert_eq!(geometry.vertices[0], 1.0); // x of first vertex
+        assert_eq!(geometry.vertices[1], 2.0); // y of first vertex
+        assert_eq!(geometry.vertices[2], 0.0); // z of first vertex
+    }
+
+    // Hertel-Mehlhorn stitch algorithm tests
+
+    #[test]
+    fn test_hertel_mehlhorn_empty_input() {
+        let triangles: Vec<usize> = Vec::new();
+        let vertices: Vec<DVec2> = Vec::new();
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_single_triangle() {
+        let triangles = vec![0, 1, 2];
+        let vertices = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.5, 1.0),
+        ];
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 3);
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_two_triangles_convex_merge() {
+        // Two triangles forming a convex quadrilateral should merge
+        //   2---3
+        //   |\ |
+        //   | \|
+        //   0--1
+        let triangles = vec![
+            0, 1, 2, // Triangle 1
+            1, 3, 2, // Triangle 2
+        ];
+        let vertices = vec![
+            DVec2::new(0.0, 0.0), // 0
+            DVec2::new(1.0, 0.0), // 1
+            DVec2::new(0.0, 1.0), // 2
+            DVec2::new(1.0, 1.0), // 3
+        ];
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+        // Should merge into a single quadrilateral
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 4);
+    }
+
+    #[test]
+    fn test_hertel_mehlhorn_two_triangles_concave_no_merge() {
+        // Two triangles that form a concave quadrilateral when merged
+        // The shared edge is 1-2
+        //
+        //   0
+        //   |\
+        //   | \2
+        //   | /|
+        //   |/ |
+        //   1--3
+        //
+        // Triangle 1: 0, 1, 2
+        // Triangle 2: 1, 3, 2
+        // Shared edge: 1-2
+        //
+        // When merged, the angle at vertex 2 would be reflex (concave)
+        // because vertex 2 is "inside" the line from 0 to 3
+
+        let triangles = vec![
+            0, 1, 2, // Triangle 1
+            1, 3, 2, // Triangle 2
+        ];
+        let vertices = vec![
+            DVec2::new(0.0, 2.0), // 0 - top left
+            DVec2::new(0.0, 0.0), // 1 - bottom left
+            DVec2::new(0.3, 1.0), // 2 - inside the would-be quad (causes concavity)
+            DVec2::new(1.0, 0.0), // 3 - bottom right
+        ];
+
+        let result = hertel_mehlhorn_stitch(&triangles, &vertices);
+
+        // The merge test checks the angles at the shared edge vertices (1 and 2)
+        // At vertex 2: the angle from 0 -> 2 -> 3 would be reflex
+        // So should remain as 2 separate triangles
+        assert_eq!(result.len(), 2);
+    }
+
+    // Trait object tests
+
+    #[test]
+    fn test_contour_set_geometry_model_trait_object() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(0.0, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let model: Box<dyn GeometryModel> = Box::new(contour_set);
+
+        let polygon_result = model.to_polygon_mesh();
+        assert!(polygon_result.is_ok());
+
+        let triangular_result = model.to_triangular_mesh();
+        assert!(triangular_result.is_ok());
+    }
+
+    #[test]
+    fn test_contour_set_complex_concave_polygon() {
+        // Star-like concave polygon
+        let points = vec![
+            DVec2::new(0.0, 3.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(3.0, 1.0),
+            DVec2::new(1.5, -0.5),
+            DVec2::new(2.0, -3.0),
+            DVec2::new(0.0, -1.5),
+            DVec2::new(-2.0, -3.0),
+            DVec2::new(-1.5, -0.5),
+            DVec2::new(-3.0, 1.0),
+            DVec2::new(-1.0, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        let triangular_result = contour_set.to_triangular_mesh();
+        assert!(triangular_result.is_ok());
+
+        let polygon_result = contour_set.to_polygon_mesh();
+        assert!(polygon_result.is_ok());
+
+        let tri_mesh = triangular_result.unwrap();
+        let poly_mesh = polygon_result.unwrap();
+
+        // Verify vertices are created correctly
+        assert_eq!(tri_mesh.get("contour_material").unwrap().vertex_count(), 10);
+        assert_eq!(poly_mesh.vertex_count(), 10);
+    }
+
+    // ============================================================================
+    // SampleContour implementation tests for ContourSet
+    // ============================================================================
+
+    #[test]
+    fn test_contour_set_sample_contour_returns_clone() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(0.0, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        // sample_contour should return a clone of itself
+        let result = contour_set.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let sampled = result.unwrap();
+        assert_eq!(sampled.contours.len(), contour_set.contours.len());
+        assert_eq!(
+            sampled.contours[0].segments.len(),
+            contour_set.contours[0].segments.len()
+        );
+    }
+
+    #[test]
+    fn test_contour_set_sample_contour_ignores_sample_distance() {
+        let points = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(1.0, 1.0),
+        ];
+        let contour = create_contour_from_points(&points);
+        let contour_set = ContourSet::with_contours(vec![contour]);
+
+        // Different sample distances should return identical results
+        let result1 = contour_set.sample_contour(0.01).unwrap();
+        let result2 = contour_set.sample_contour(1.0).unwrap();
+        let result3 = contour_set.sample_contour(100.0).unwrap();
+
+        assert_eq!(result1.contours.len(), result2.contours.len());
+        assert_eq!(result2.contours.len(), result3.contours.len());
+        assert_eq!(
+            result1.contours[0].segments.len(),
+            result2.contours[0].segments.len()
+        );
+    }
+
+    #[test]
+    fn test_contour_set_sample_contour_empty() {
+        let contour_set = ContourSet::new();
+
+        let result = contour_set.sample_contour(0.1);
+        assert!(result.is_ok());
+
+        let sampled = result.unwrap();
+        assert!(sampled.is_empty());
     }
 }

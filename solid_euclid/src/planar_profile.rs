@@ -1,6 +1,8 @@
 use crate::geometry_error::GeometryError;
+use crate::geometry_model::GeometryModel;
 use crate::planar_contour::{ContourSet, SampleContour};
 use crate::planar_nurbs_curve::{Curve, CurveSet, Nurbs, NurbsSegment};
+use crate::polygon_mesh::PolygonMesh;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -623,6 +625,49 @@ impl SampleContour for PlanarProfile {
 
         let curve_set = self.to_curve_set()?;
         curve_set.sample_contour(sample_distance)
+    }
+}
+
+impl GeometryModel for PlanarProfile {
+    /// Converts the planar profile to a polygon mesh.
+    ///
+    /// This method samples the profile contour and delegates to the `ContourSet`'s
+    /// `GeometryModel` implementation. The profile is converted to a 2D polygon mesh
+    /// in the XY plane with Z=0.
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the profile,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The profile is empty
+    /// - The profile contains invalid commands
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Use a default sample distance based on a reasonable approximation
+        // This will be overridden by specific methods if needed
+        let sample_distance = 0.1;
+        self.to_polygon_mesh_with_sample_distance(sample_distance)
+    }
+}
+
+impl PlanarProfile {
+    /// Converts the planar profile to a polygon mesh with a specified sample distance.
+    ///
+    /// This method samples the profile contour and delegates to the `ContourSet`'s
+    /// `GeometryModel` implementation.
+    ///
+    /// # Arguments
+    /// * `sample_distance` - The maximum distance between consecutive sample points
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the profile.
+    pub fn to_polygon_mesh_with_sample_distance(
+        &self,
+        sample_distance: f64,
+    ) -> Result<PolygonMesh, GeometryError> {
+        let contour_set = self.sample_contour(sample_distance)?;
+        contour_set.to_polygon_mesh()
     }
 }
 
@@ -2892,5 +2937,250 @@ mod tests {
                 gap
             );
         }
+    }
+
+    // ============================================================================
+    // GeometryModel tests for PlanarProfile
+    // ============================================================================
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_simple_square() {
+        // Create a simple square profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh();
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty(), "Mesh should have vertices");
+        assert!(!mesh.polygons.is_empty(), "Mesh should have polygons");
+
+        // Check that vertices are in the XY plane
+        for vertex in &mesh.vertices {
+            assert!(
+                (vertex.position.z).abs() < 1e-10,
+                "Vertices should be in XY plane (Z=0)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_triangle() {
+        // Create a simple triangle profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh();
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        assert_eq!(mesh.vertices.len(), 3, "Triangle should have 3 vertices");
+        assert!(
+            !mesh.polygons.is_empty(),
+            "Mesh should have at least one polygon"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_with_sample_distance() {
+        // Create a circle profile
+        let center = DVec2::new(0.0, 0.0);
+        let radius = 1.0;
+        let start = DVec2::new(radius, 0.0);
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(PathCommand::Move { point: start }, Corner::Edge),
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: start,
+                    center,
+                },
+                Corner::SmoothEdge,
+            ),
+        ]);
+
+        // Test with different sample distances
+        let mesh_coarse = profile.to_polygon_mesh_with_sample_distance(0.5);
+        assert!(mesh_coarse.is_ok());
+
+        let mesh_fine = profile.to_polygon_mesh_with_sample_distance(0.1);
+        assert!(mesh_fine.is_ok());
+
+        // Finer sampling should produce more vertices
+        assert!(
+            mesh_fine.unwrap().vertices.len() >= mesh_coarse.unwrap().vertices.len(),
+            "Finer sampling should produce at least as many vertices"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_with_fillet() {
+        // Create a square with filleted corners
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh_with_sample_distance(0.05);
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        // With fillets, we should have more vertices than a simple square
+        assert!(
+            mesh.vertices.len() > 4,
+            "Filleted square should have more than 4 vertices"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_normals() {
+        // Create a simple square profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh().unwrap();
+
+        // All vertex normals should point up (positive Z)
+        for vertex in &mesh.vertices {
+            assert!(
+                vertex.normal.z > 0.0,
+                "Vertex normals should point up (positive Z)"
+            );
+        }
+
+        // All polygon normals should point up (positive Z)
+        for polygon in &mesh.polygons {
+            assert!(
+                polygon.normal.z > 0.0,
+                "Polygon normals should point up (positive Z)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_empty_profile() {
+        let profile = PlanarProfile::new();
+        let mesh = profile.to_polygon_mesh();
+
+        // Empty profile should result in an empty mesh or an error
+        // The behavior depends on how the ContourSet handles empty input
+        // Most likely it will be an empty mesh
+        if let Ok(mesh) = mesh {
+            assert!(mesh.is_empty(), "Empty profile should produce empty mesh");
+        }
+        // If it's an error, that's also acceptable
     }
 }
