@@ -1,9 +1,10 @@
 use wasm_bindgen::prelude::*;
 
 use crate::geometry_model::GeometryModel;
+use crate::planar_profile::PlanarProfile;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
-use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
+use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Extrude, Torus};
 use crate::triangular_mesh::TriangularMesh;
 
 #[wasm_bindgen]
@@ -441,12 +442,96 @@ pub fn create_conical_frustum(frustum: JsValue) -> Result<WasmTriangularMesh, Js
     Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
+/// Creates a triangular mesh for an Extrude from a JavaScript object.
+///
+/// An extrude is created by sweeping a 2D profile along the Y-axis.
+/// The extrusion goes from -height/2 to +height/2, centered at the origin.
+///
+/// The extrude supports separate materials for:
+/// - Side faces (geometry_id based on profile segment IDs)
+/// - Bottom cap (geometry_id = -1)
+/// - Top cap (geometry_id = -2)
+///
+/// # Arguments
+/// * `extrude` - A JavaScript object representing an `Extrude` with the following fields:
+///   - `profile`: The 2D profile to extrude (PlanarProfile with commands)
+///   - `height`: The total height of the extrusion (f64)
+///   - `sample_distance`: The sample distance for profile curves (f64)
+///   - `material`: The material assignment
+///
+/// # Example TypeScript
+/// ```typescript
+/// // Simple square extrusion with uniform material
+/// const mesh = create_extrude({
+///   profile: {
+///     commands: [
+///       { path: { Move: { point: [0.0, 0.0] } }, corner: "Edge" },
+///       { path: { Line: { point: [1.0, 0.0] } }, corner: "Edge" },
+///       { path: { Line: { point: [1.0, 1.0] } }, corner: "Edge" },
+///       { path: { Line: { point: [0.0, 1.0] } }, corner: "Edge" },
+///       { path: { Line: { point: [0.0, 0.0] } }, corner: "Edge" },
+///     ]
+///   },
+///   height: 2.0,
+///   sample_distance: 0.1,
+///   material: { Uniform: "default" }
+/// });
+///
+/// // Triangle extrusion with filleted corners
+/// const mesh = create_extrude({
+///   profile: {
+///     commands: [
+///       { path: { Move: { point: [0.0, 0.0] } }, corner: "Edge" },
+///       { path: { Line: { point: [1.0, 0.0] } }, corner: { Fillet: { radius: 0.1 } } },
+///       { path: { Line: { point: [0.5, 0.866] } }, corner: { Fillet: { radius: 0.1 } } },
+///       { path: { Line: { point: [0.0, 0.0] } }, corner: { Fillet: { radius: 0.1 } } },
+///     ]
+///   },
+///   height: 1.5,
+///   sample_distance: 0.05,
+///   material: { Uniform: "metal" }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_extrude(extrude: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let extrude: Extrude = serde_wasm_bindgen::from_value(extrude)
+        .map_err(|e| JsError::new(&format!("Failed to parse extrude: {}", e)))?;
+
+    let triangular_mesh = extrude
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create extrude mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
+/// Creates a PlanarProfile from a JavaScript object.
+///
+/// This is a utility function for creating profiles programmatically from JavaScript.
+///
+/// # Arguments
+/// * `profile` - A JavaScript object representing a `PlanarProfile` with commands
+///
+/// # Returns
+/// A serialized PlanarProfile object that can be used with create_extrude
+#[wasm_bindgen]
+pub fn create_planar_profile(profile: JsValue) -> Result<JsValue, JsError> {
+    let profile: PlanarProfile = serde_wasm_bindgen::from_value(profile)
+        .map_err(|e| JsError::new(&format!("Failed to parse profile: {}", e)))?;
+
+    serde_wasm_bindgen::to_value(&profile)
+        .map_err(|e| JsError::new(&format!("Failed to serialize profile: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planar_profile::Corner;
+    use crate::planar_profile::{Corner, PathCommand, ProfileCommand};
     use crate::platonic_solid::{Material, PlatonicSolid};
     use crate::sphere::Sphere;
+    use glam::DVec2;
 
     #[test]
     fn test_hello_wasm() {
@@ -1893,5 +1978,495 @@ mod tests {
 
         // Smooth edges behave like sharp edges (no extra segments)
         assert_eq!(mesh.geometry_count(), 3);
+    }
+
+    // ==================== Extrude Tests ====================
+
+    // Helper function to create a square profile for testing
+    fn create_square_profile() -> PlanarProfile {
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ])
+    }
+
+    // Helper function to create a triangle profile for testing
+    fn create_triangle_profile() -> PlanarProfile {
+        PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.866),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ])
+    }
+
+    // Helper to create a WasmTriangularMesh from an Extrude directly for testing
+    fn create_mesh_from_extrude(extrude: Extrude) -> WasmTriangularMesh {
+        let triangular_mesh = extrude.to_triangular_mesh().unwrap();
+
+        let mut material_ids = Vec::new();
+        let mut geometries = Vec::new();
+
+        let mut sorted_materials: Vec<_> = triangular_mesh.geometries.keys().collect();
+        sorted_materials.sort();
+
+        for material_id in sorted_materials {
+            if let Some(geometry) = triangular_mesh.geometries.get(material_id) {
+                material_ids.push(material_id.clone());
+                geometries.push(WasmTriangularGeometry {
+                    vertices: geometry.vertices.clone(),
+                    normals: geometry.normals.clone(),
+                    uvs: geometry.uvs.clone(),
+                    indices: geometry.indices.iter().map(|&i| i as u32).collect(),
+                });
+            }
+        }
+
+        WasmTriangularMesh {
+            material_ids,
+            geometries,
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_square_uniform_material() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids.len(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_extrude_triangle_uniform_material() {
+        let profile = create_triangle_profile();
+        let extrude = Extrude::new(profile, 1.5, 0.1, Material::Uniform("metal".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(geometry.vertex_count() > 0);
+        assert!(geometry.triangle_count() > 0);
+    }
+
+    #[test]
+    fn test_create_extrude_default_material() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Default);
+        let mesh = create_mesh_from_extrude(extrude);
+
+        // Default material creates separate materials for each profile segment and caps
+        assert!(mesh.geometry_count() >= 3); // At least sides + bottom cap + top cap
+    }
+
+    #[test]
+    fn test_create_extrude_array_materials() {
+        let profile = create_square_profile();
+        // Array materials: [body, bottom_cap, top_cap]
+        let materials = vec![
+            "body".to_string(),
+            "bottom_cap".to_string(),
+            "top_cap".to_string(),
+        ];
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Array(materials));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert!(mesh.geometry_count() >= 1);
+    }
+
+    #[test]
+    fn test_create_extrude_geometry_data_not_empty() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(!geo.vertices.is_empty());
+        assert!(!geo.normals.is_empty());
+        assert!(!geo.uvs.is_empty());
+        assert!(!geo.indices.is_empty());
+    }
+
+    #[test]
+    fn test_create_extrude_geometry_data_sizes_consistent() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        let geo = mesh.geometries.get(0).unwrap();
+
+        // vertices and normals should have same length (3 components per vertex)
+        assert_eq!(geo.vertices.len(), geo.normals.len());
+        // uvs have 2 components per vertex, vertices have 3
+        assert_eq!(geo.uvs.len() * 3, geo.vertices.len() * 2);
+    }
+
+    #[test]
+    fn test_create_extrude_normals_normalized() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        for i in (0..geometry.normals.len()).step_by(3) {
+            let nx = geometry.normals[i];
+            let ny = geometry.normals[i + 1];
+            let nz = geometry.normals[i + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+            assert!(
+                (length - 1.0).abs() < 0.001,
+                "Normal not normalized: length = {}",
+                length
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_indices_within_bounds() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        let vertex_count = geometry.vertex_count() as u32;
+        for &index in &geometry.indices {
+            assert!(
+                index < vertex_count,
+                "Index {} out of bounds (vertex count: {})",
+                index,
+                vertex_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_different_heights() {
+        // Test with different heights
+        for height in [0.5, 1.0, 2.0, 5.0] {
+            let profile = create_square_profile();
+            let extrude = Extrude::new(
+                profile,
+                height,
+                0.1,
+                Material::Uniform("default".to_string()),
+            );
+            let mesh = create_mesh_from_extrude(extrude);
+
+            assert_eq!(mesh.geometry_count(), 1);
+            let geo = mesh.geometries.get(0).unwrap();
+            assert!(geo.vertex_count() > 0);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_different_sample_distances() {
+        // Test with different sample distances
+        for sample_distance in [0.05, 0.1, 0.2, 0.5] {
+            let profile = create_square_profile();
+            let extrude = Extrude::new(
+                profile,
+                2.0,
+                sample_distance,
+                Material::Uniform("default".to_string()),
+            );
+            let mesh = create_mesh_from_extrude(extrude);
+
+            assert_eq!(mesh.geometry_count(), 1);
+            let geo = mesh.geometries.get(0).unwrap();
+            assert!(geo.vertex_count() > 0);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_with_filleted_corners() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+        ]);
+        let extrude = Extrude::new(profile, 2.0, 0.05, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+        // Filleted corners should produce more vertices than sharp corners
+    }
+
+    #[test]
+    fn test_create_extrude_with_chamfered_corners() {
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Chamfer { distance: 0.1 },
+            ),
+        ]);
+        let extrude = Extrude::new(profile, 2.0, 0.1, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+        assert!(geo.vertex_count() > 0);
+    }
+
+    #[test]
+    fn test_create_extrude_get_geometry_by_material() {
+        let profile = create_square_profile();
+        let extrude = Extrude::new(
+            profile,
+            2.0,
+            0.1,
+            Material::Uniform("my_material".to_string()),
+        );
+        let mesh = create_mesh_from_extrude(extrude);
+
+        let geometry = mesh.get_geometry_by_material("my_material");
+        let missing = mesh.get_geometry_by_material("nonexistent");
+
+        assert!(geometry.is_some());
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_create_extrude_triangle_with_chamfer_and_triangle_hole_with_chamfer() {
+        // This test verifies the exact user scenario that was failing:
+        // 3-point outline with chamfer corners + 3-point hole with chamfer corners
+        let chamfer_distance = 0.1;
+        let hole_chamfer_distance = 0.03;
+
+        // Outer triangle (CCW winding) - radius 0.8
+        let outer_radius = 0.8;
+        let outer_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * outer_radius, angle.sin() * outer_radius)
+            })
+            .collect();
+
+        // Inner triangle (CW winding for hole) - radius 0.3
+        let inner_radius = 0.3;
+        let inner_points: Vec<DVec2> = (0..3)
+            .map(|i| {
+                let angle =
+                    (i as f64 / 3.0) * std::f64::consts::PI * 2.0 - std::f64::consts::PI / 2.0;
+                DVec2::new(angle.cos() * inner_radius, angle.sin() * inner_radius)
+            })
+            .collect();
+
+        // Build profile commands
+        let profile = PlanarProfile::with_commands(vec![
+            // Outer triangle
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: outer_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[1],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[2],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: outer_points[0],
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            // Inner triangle (reversed for hole - CW winding)
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: inner_points[0],
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[2],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[1],
+                }, // Reversed
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: inner_points[0],
+                },
+                Corner::Chamfer {
+                    distance: hole_chamfer_distance,
+                },
+            ),
+        ]);
+
+        // Verify profile converts to curve set correctly
+        let curve_set = profile.to_curve_set();
+        assert!(curve_set.is_ok(), "Profile should convert to curve set");
+        let curve_set = curve_set.unwrap();
+
+        // Should have 2 curves (outer + hole)
+        assert_eq!(
+            curve_set.curves.len(),
+            2,
+            "Should have 2 curves (outline + hole)"
+        );
+
+        // Both curves should have 6 segments (3 edges + 3 chamfers)
+        assert_eq!(
+            curve_set.curves[0].segments.len(),
+            6,
+            "Outer triangle with 3 chamfers should have 6 segments"
+        );
+        assert_eq!(
+            curve_set.curves[1].segments.len(),
+            6,
+            "Inner triangle with 3 chamfers should have 6 segments"
+        );
+
+        // Create extrude and mesh
+        let extrude = Extrude::new(profile, 1.0, 0.05, Material::Uniform("default".to_string()));
+        let mesh = create_mesh_from_extrude(extrude);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geo = mesh.geometries.get(0).unwrap();
+
+        // Should have substantial geometry for outline + hole with chamfers
+        assert!(
+            geo.vertex_count() > 20,
+            "Should have many vertices for chamfered triangle with hole"
+        );
+        assert!(
+            geo.triangle_count() > 10,
+            "Should have many triangles for chamfered triangle with hole"
+        );
     }
 }

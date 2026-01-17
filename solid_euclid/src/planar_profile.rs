@@ -1,6 +1,8 @@
 use crate::geometry_error::GeometryError;
+use crate::geometry_model::GeometryModel;
 use crate::planar_contour::{ContourSet, SampleContour};
 use crate::planar_nurbs_curve::{Curve, CurveSet, Nurbs, NurbsSegment};
+use crate::polygon_mesh::PolygonMesh;
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -136,6 +138,66 @@ impl PlanarProfile {
         self.commands.is_empty()
     }
 
+    /// Helper function to process a closing corner for a curve.
+    /// This handles the case where the curve forms a closed loop and has a pending corner
+    /// that needs to be added at the junction between the last and first segments.
+    fn process_closing_corner(
+        curve: &mut Curve,
+        pending_corner: &mut Option<(Corner, DVec2, DVec2)>,
+        current_pos: DVec2,
+        first_pos: DVec2,
+        path_segment_index: u32,
+    ) {
+        let is_closed = (current_pos - first_pos).length() < 1e-9;
+
+        if is_closed {
+            // Mark the curve as closed
+            curve.set_closed(true);
+
+            // Get the first segment's start tangent
+            if let (Some((corner, _end_pos, end_tangent)), Some(first_segment)) =
+                (pending_corner.take(), curve.segments.first())
+            {
+                let first_tangent = first_segment.nurbs.derivative(0.0).normalize_or_zero();
+
+                // Add closing corner segment if needed
+                if let Some(corner_nurbs) =
+                    Self::create_corner_nurbs(corner, current_pos, end_tangent, first_tangent)
+                {
+                    let corner_start = corner_nurbs.start_point();
+                    let corner_end = corner_nurbs.end_point();
+
+                    // Truncate the LAST segment to end at corner_start
+                    if let Some(last_segment) = curve.segments.last_mut() {
+                        let seg_start = last_segment.nurbs.start_point();
+                        last_segment.nurbs = Nurbs::line(seg_start, corner_start);
+                        last_segment.end_distance =
+                            last_segment.start_distance + last_segment.nurbs.length();
+                    }
+
+                    // Add the corner segment
+                    let corner_segment_id = path_segment_index * 2 - 1;
+                    curve.add_segment(NurbsSegment::new(
+                        corner_nurbs,
+                        curve.total_length(),
+                        false,
+                        corner_segment_id,
+                    ));
+
+                    // Truncate the FIRST segment to start at corner_end
+                    if let Some(first_segment) = curve.segments.first_mut() {
+                        let seg_end = first_segment.nurbs.end_point();
+                        first_segment.nurbs = Nurbs::line(corner_end, seg_end);
+                        // Recalculate distances for first segment
+                        // Note: start_distance stays 0 for first segment
+                        first_segment.end_distance =
+                            first_segment.start_distance + first_segment.nurbs.length();
+                    }
+                }
+            }
+        }
+    }
+
     /// Converts this `PlanarProfile` to a `CurveSet`.
     ///
     /// Each `ProfileCommand` is converted to 0, 1, or 2 NURBS segments:
@@ -167,6 +229,19 @@ impl PlanarProfile {
                             parameter: format!("commands[{}].corner", cmd_idx),
                             message: "Move command must have Edge corner".to_string(),
                         });
+                    }
+
+                    // Process closing corner for current curve before finalizing
+                    if let Some(curve) = current_curve.as_mut() {
+                        if !curve.is_empty() {
+                            Self::process_closing_corner(
+                                curve,
+                                &mut pending_corner,
+                                current_pos,
+                                first_pos,
+                                path_segment_index,
+                            );
+                        }
                     }
 
                     // Finalize current curve if exists
@@ -319,38 +394,16 @@ impl PlanarProfile {
             }
         }
 
-        // Handle closing corner if the curve is closed
+        // Handle closing corner for the last curve
         if let Some(curve) = current_curve.as_mut() {
             if !curve.is_empty() {
-                let is_closed = (current_pos - first_pos).length() < 1e-9;
-
-                if is_closed {
-                    // Mark the curve as closed
-                    curve.set_closed(true);
-
-                    // Get the first segment's start tangent
-                    if let (Some((corner, _end_pos, end_tangent)), Some(first_segment)) =
-                        (pending_corner.take(), curve.segments.first())
-                    {
-                        let first_tangent = first_segment.nurbs.derivative(0.0).normalize_or_zero();
-
-                        // Add closing corner segment if needed
-                        if let Some(corner_nurbs) = Self::create_corner_nurbs(
-                            corner,
-                            current_pos,
-                            end_tangent,
-                            first_tangent,
-                        ) {
-                            let corner_segment_id = path_segment_index * 2 - 1;
-                            curve.add_segment(NurbsSegment::new(
-                                corner_nurbs,
-                                curve.total_length(),
-                                false,
-                                corner_segment_id,
-                            ));
-                        }
-                    }
-                }
+                Self::process_closing_corner(
+                    curve,
+                    &mut pending_corner,
+                    current_pos,
+                    first_pos,
+                    path_segment_index,
+                );
             }
         }
 
@@ -623,6 +676,49 @@ impl SampleContour for PlanarProfile {
 
         let curve_set = self.to_curve_set()?;
         curve_set.sample_contour(sample_distance)
+    }
+}
+
+impl GeometryModel for PlanarProfile {
+    /// Converts the planar profile to a polygon mesh.
+    ///
+    /// This method samples the profile contour and delegates to the `ContourSet`'s
+    /// `GeometryModel` implementation. The profile is converted to a 2D polygon mesh
+    /// in the XY plane with Z=0.
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the profile,
+    /// or a `GeometryError` if the conversion fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The profile is empty
+    /// - The profile contains invalid commands
+    fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        // Use a default sample distance based on a reasonable approximation
+        // This will be overridden by specific methods if needed
+        let sample_distance = 0.1;
+        self.to_polygon_mesh_with_sample_distance(sample_distance)
+    }
+}
+
+impl PlanarProfile {
+    /// Converts the planar profile to a polygon mesh with a specified sample distance.
+    ///
+    /// This method samples the profile contour and delegates to the `ContourSet`'s
+    /// `GeometryModel` implementation.
+    ///
+    /// # Arguments
+    /// * `sample_distance` - The maximum distance between consecutive sample points
+    ///
+    /// # Returns
+    /// A `Result` containing the `PolygonMesh` representation of the profile.
+    pub fn to_polygon_mesh_with_sample_distance(
+        &self,
+        sample_distance: f64,
+    ) -> Result<PolygonMesh, GeometryError> {
+        let contour_set = self.sample_contour(sample_distance)?;
+        contour_set.to_polygon_mesh()
     }
 }
 
@@ -2892,5 +2988,352 @@ mod tests {
                 gap
             );
         }
+    }
+
+    // ============================================================================
+    // GeometryModel tests for PlanarProfile
+    // ============================================================================
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_simple_square() {
+        // Create a simple square profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh();
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        assert!(!mesh.vertices.is_empty(), "Mesh should have vertices");
+        assert!(!mesh.polygons.is_empty(), "Mesh should have polygons");
+
+        // Check that vertices are in the XY plane
+        for vertex in &mesh.vertices {
+            assert!(
+                (vertex.position.z).abs() < 1e-10,
+                "Vertices should be in XY plane (Z=0)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_triangle() {
+        // Create a simple triangle profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh();
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        assert_eq!(mesh.vertices.len(), 3, "Triangle should have 3 vertices");
+        assert!(
+            !mesh.polygons.is_empty(),
+            "Mesh should have at least one polygon"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_with_sample_distance() {
+        // Create a circle profile
+        let center = DVec2::new(0.0, 0.0);
+        let radius = 1.0;
+        let start = DVec2::new(radius, 0.0);
+
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(PathCommand::Move { point: start }, Corner::Edge),
+            ProfileCommand::new(
+                PathCommand::Ellipse {
+                    point: start,
+                    center,
+                },
+                Corner::SmoothEdge,
+            ),
+        ]);
+
+        // Test with different sample distances
+        let mesh_coarse = profile.to_polygon_mesh_with_sample_distance(0.5);
+        assert!(mesh_coarse.is_ok());
+
+        let mesh_fine = profile.to_polygon_mesh_with_sample_distance(0.1);
+        assert!(mesh_fine.is_ok());
+
+        // Finer sampling should produce more vertices
+        assert!(
+            mesh_fine.unwrap().vertices.len() >= mesh_coarse.unwrap().vertices.len(),
+            "Finer sampling should produce at least as many vertices"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_with_fillet() {
+        // Create a square with filleted corners
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Fillet { radius: 0.1 },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh_with_sample_distance(0.05);
+        assert!(mesh.is_ok());
+
+        let mesh = mesh.unwrap();
+        // With fillets, we should have more vertices than a simple square
+        assert!(
+            mesh.vertices.len() > 4,
+            "Filleted square should have more than 4 vertices"
+        );
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_normals() {
+        // Create a simple square profile
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 1.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+        ]);
+
+        let mesh = profile.to_polygon_mesh().unwrap();
+
+        // All vertex normals should point up (positive Z)
+        for vertex in &mesh.vertices {
+            assert!(
+                vertex.normal.z > 0.0,
+                "Vertex normals should point up (positive Z)"
+            );
+        }
+
+        // All polygon normals should point up (positive Z)
+        for polygon in &mesh.polygons {
+            assert!(
+                polygon.normal.z > 0.0,
+                "Polygon normals should point up (positive Z)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_planar_profile_to_polygon_mesh_empty_profile() {
+        let profile = PlanarProfile::new();
+        let mesh = profile.to_polygon_mesh();
+
+        // Empty profile should result in an empty mesh or an error
+        // The behavior depends on how the ContourSet handles empty input
+        // Most likely it will be an empty mesh
+        if let Ok(mesh) = mesh {
+            assert!(mesh.is_empty(), "Empty profile should produce empty mesh");
+        }
+        // If it's an error, that's also acceptable
+    }
+
+    /// Detailed diagnostic test for triangle with chamfer corners
+    #[test]
+    fn test_triangle_profile_with_chamfer_corners_diagnostic() {
+        // Create a triangle profile with chamfer corners at all 3 vertices
+        let chamfer_distance = 0.1;
+        let profile = PlanarProfile::with_commands(vec![
+            ProfileCommand::new(
+                PathCommand::Move {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Edge,
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(1.0, 0.0),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.5, 0.866),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+            ProfileCommand::new(
+                PathCommand::Line {
+                    point: DVec2::new(0.0, 0.0),
+                },
+                Corner::Chamfer {
+                    distance: chamfer_distance,
+                },
+            ),
+        ]);
+
+        let curve_set = profile.to_curve_set().unwrap();
+
+        assert_eq!(
+            curve_set.curves.len(),
+            1,
+            "Should have exactly 1 curve for the outline"
+        );
+        let curve = &curve_set.curves[0];
+
+        // Triangle with 3 chamfers should have 6 segments:
+        // 3 edge segments (truncated at both ends) + 3 chamfer segments
+        println!("\n=== Triangle Chamfer Profile Diagnostic ===");
+        println!("Number of segments: {}", curve.segments.len());
+
+        for (i, segment) in curve.segments.iter().enumerate() {
+            let start = segment.nurbs.evaluate(0.0);
+            let end = segment.nurbs.evaluate(1.0);
+            let mid = segment.nurbs.evaluate(0.5);
+            println!(
+                "Segment {} (id={}): start=({:.4}, {:.4}), end=({:.4}, {:.4}), mid=({:.4}, {:.4})",
+                i, segment.segment_id, start.x, start.y, end.x, end.y, mid.x, mid.y
+            );
+        }
+
+        // Verify we have 6 segments
+        assert_eq!(
+            curve.segments.len(),
+            6,
+            "Triangle with 3 chamfers should have 6 segments (3 edges + 3 chamfers)"
+        );
+
+        // Verify segments form a closed loop (end of each segment is start of next)
+        for i in 0..curve.segments.len() {
+            let this_end = curve.segments[i].nurbs.evaluate(1.0);
+            let next_start = curve.segments[(i + 1) % curve.segments.len()]
+                .nurbs
+                .evaluate(0.0);
+            let gap = (this_end - next_start).length();
+            assert!(
+                gap < 1e-9,
+                "Gap between segment {} end and segment {} start: {} (end={:?}, start={:?})",
+                i,
+                (i + 1) % curve.segments.len(),
+                gap,
+                this_end,
+                next_start
+            );
+        }
+
+        // Verify segment connectivity back to start
+        let first_start = curve.segments[0].nurbs.evaluate(0.0);
+        let last_end = curve.segments.last().unwrap().nurbs.evaluate(1.0);
+        let closing_gap = (last_end - first_start).length();
+        assert!(
+            closing_gap < 1e-9,
+            "Closing gap: {} (last_end={:?}, first_start={:?})",
+            closing_gap,
+            last_end,
+            first_start
+        );
+
+        println!("All 6 segments present and connected!\n");
     }
 }

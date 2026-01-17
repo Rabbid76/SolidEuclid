@@ -26,6 +26,11 @@ async function main() {
               Sweeps
             </a>
           </li>
+          <li style="margin: 10px 0;">
+            <a href="./extrude/" style="color: #007acc; text-decoration: none; font-size: 18px;">
+              Extrude
+            </a>
+          </li>
         </ul>
       </nav>
     </div>

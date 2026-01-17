@@ -392,3 +392,176 @@ TEST_SUITE(
         CHECK(mesh.entry_count() == 2);  // "base" and "special"
     }
 }
+
+// =============================================================================
+// Extrude C API Tests
+// =============================================================================
+
+TEST_SUITE(
+    "Extrude C API"
+) {
+    TEST_CASE("create_extrude_c returns error for null JSON") {
+        MeshGuard mesh{create_extrude_c(nullptr)};
+
+        CHECK(mesh.has_error());
+        CHECK(mesh.error_message().contains("Null"));
+        CHECK(mesh.entry_count() == 0);
+    }
+
+    TEST_CASE("create_extrude_c returns error for invalid JSON") {
+        MeshGuard mesh{create_extrude_c("{invalid json}")};
+
+        CHECK(mesh.has_error());
+        CHECK(mesh.error_message().contains("Failed to parse"));
+    }
+
+    TEST_CASE("Square extrude with uniform material") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+
+        const auto& entry = mesh.entry(0);
+        CHECK(std::string_view{entry.material_id} == "default");
+        CHECK(vertex_count(entry.geometry) > 0);
+        CHECK(triangle_count(entry.geometry) > 0);
+    }
+
+    TEST_CASE("Triangle extrude with uniform material") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.5,0.866]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":1.5,"sample_distance":0.1,"material":{"Uniform":"metal"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+
+        const auto& entry = mesh.entry(0);
+        CHECK(std::string_view{entry.material_id} == "metal");
+        CHECK(vertex_count(entry.geometry) > 0);
+        CHECK(triangle_count(entry.geometry) > 0);
+    }
+
+    TEST_CASE("Extrude with default material creates multiple entries") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":"Default"})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        // Default material creates separate materials for each profile segment and caps
+        CHECK(mesh.entry_count() >= 3);
+    }
+
+    TEST_CASE("Extrude with filleted corners") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[1.0,1.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[0.0,1.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[0.0,0.0]}},"corner":{"Fillet":{"radius":0.1}}}]},"height":2.0,"sample_distance":0.05,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+        CHECK(triangle_count(mesh.entry(0).geometry) > 0);
+    }
+
+    TEST_CASE("Extrude with chamfered corners") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[1.0,1.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[0.0,1.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[0.0,0.0]}},"corner":{"Chamfer":{"distance":0.1}}}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+        CHECK(triangle_count(mesh.entry(0).geometry) > 0);
+    }
+
+    TEST_CASE("Extrude with smooth edge corners") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"SmoothEdge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"SmoothEdge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"SmoothEdge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"SmoothEdge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+        CHECK(triangle_count(mesh.entry(0).geometry) > 0);
+    }
+
+    TEST_CASE("Extrude with different heights") {
+        for (const auto& height : {"0.5", "1.0", "2.0", "5.0"}) {
+            std::string json =
+                R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":)" +
+                std::string(height) +
+                R"(,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+            MeshGuard mesh{create_extrude_c(json.c_str())};
+
+            REQUIRE_FALSE(mesh.has_error());
+            CHECK(vertex_count(mesh.entry(0).geometry) > 0);
+        }
+    }
+
+    TEST_CASE("L-shaped extrude profile") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.5]}},"corner":"Edge"},{"path":{"Line":{"point":[0.5,0.5]}},"corner":"Edge"},{"path":{"Line":{"point":[0.5,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        REQUIRE(mesh.entry_count() == 1);
+        CHECK(vertex_count(mesh.entry(0).geometry) > 0);
+        CHECK(triangle_count(mesh.entry(0).geometry) > 0);
+    }
+
+    TEST_CASE("Extrude geometry data arrays are consistent") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        const auto& geom = mesh.entry(0).geometry;
+
+        CHECK(geom.vertices_len == geom.normals_len);
+        CHECK(geom.uvs_len * 3 == geom.vertices_len * 2);
+        CHECK(geom.vertices != nullptr);
+        CHECK(geom.normals != nullptr);
+        CHECK(geom.uvs != nullptr);
+        CHECK(geom.indices != nullptr);
+    }
+
+    TEST_CASE("Extrude indices are within vertex bounds") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        const auto& geom = mesh.entry(0).geometry;
+        const auto vert_count = static_cast<std::uint32_t>(vertex_count(geom));
+        const auto indices = std::span{geom.indices, geom.indices_len};
+
+        for (auto index : indices) {
+            CHECK(index < vert_count);
+        }
+    }
+
+    TEST_CASE("Extrude normals are normalized") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        const auto& geom = mesh.entry(0).geometry;
+        const auto normals = std::span{geom.normals, geom.normals_len};
+
+        for (std::size_t i = 0; i < normals.size(); i += 3) {
+            const auto nx = normals[i];
+            const auto ny = normals[i + 1];
+            const auto nz = normals[i + 2];
+            const auto length = std::sqrt(nx * nx + ny * ny + nz * nz);
+            CHECK(std::abs(length - 1.0f) < 0.001f);
+        }
+    }
+
+    TEST_CASE("Extrude with Map material") {
+        constexpr auto json =
+            R"({"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,1.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":2.0,"sample_distance":0.1,"material":{"Map":{"default":"base","face_map":{"-1":"bottom","-2":"top"}}}})";
+        MeshGuard mesh{create_extrude_c(json)};
+
+        REQUIRE_FALSE(mesh.has_error());
+        CHECK(mesh.entry_count() >= 1);  // At least base material
+    }
+}

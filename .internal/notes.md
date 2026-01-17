@@ -1,17 +1,6 @@
 # Notes
 
-## TODO
-
-- A rotation body or an extrude body can be created from two 2D polylines: one for the shape and one for the path.
-  - Rotation bodies from closed and open 2D polyline
-  - Extrude from closed and open 2D polyline
-- Cylinder and cone from a rotation body with edges encoded in a 2D polyline (e.g. for a capsule).
-- Caps for rotation bodies and extrusions
-- Top and bottom edges for rotation bodies and extrusions.
-
-## Chats
-
-### Rust WebAssembly: JS, TS, C++
+## Rust WebAssembly: JS, TS, C++
 
 > I have experience creating a web-assembly from c++ code using Emscrpten. Emscripten can generate Javascript or wasm binaries from c++. With version 4 also typescrpt types are provided.
 Now I want to use "rust". I know rust supports web-assembly. I want to create a library that can be used in both c++, through the rust c bridge and in typepscript by creating a wasm.
@@ -23,14 +12,14 @@ The short answer is: **Yes, Rust can generate JavaScript glue code and TypeScrip
 
 ---
 
-#### 1. How Rust generates JS and TypeScript
+### 1. How Rust generates JS and TypeScript
 
 To get the same "JS + Wasm + TS" output you are used to with Emscripten, you use **`wasm-bindgen`** and its companion build tool **`wasm-pack`**.
 
 - **`wasm-bindgen`**: This is a library/CLI that bridges Rust types (like `String`, `Vec`, or custom `structs`) to JavaScript types.
 - **`wasm-pack`**: This is the "orchestrator" (similar to the `emcc` command). It compiles your code to Wasm, runs `wasm-bindgen` to create the JS wrapper, and **automatically generates `.d.ts` files** for TypeScript.
 
-##### The Workflow
+#### The Workflow
 
 1. **Annotate your Rust code:** Use the `#[wasm_bindgen]` attribute.
 
@@ -55,11 +44,11 @@ To get the same "JS + Wasm + TS" output you are used to with Emscripten, you use
 - `your_library.js` (The JS glue code)
 - `your_library.d.ts` (The **TypeScript types**)
 
-#### 2. Using the same code for C++ and TypeScript
+### 2. Using the same code for C++ and TypeScript
 
 To create a "Dual-ABI" library that works for both C++ and TypeScript, you need to export your functions in two ways within the same `lib.rs` file.
 
-##### The "Dual-Export" Pattern
+#### The "Dual-Export" Pattern
 
 You can use the same logic but wrap it in different export headers:
 
@@ -82,7 +71,7 @@ pub extern "C" fn add_c(a: i32, b: i32) -> i32 {
 }
 ```
 
-##### Comparison Table: Rust vs. Emscripten
+#### Comparison Table: Rust vs. Emscripten
 
 | Feature | Emscripten (C++) | Rust Toolchain |
 | --- | --- | --- |
@@ -91,7 +80,7 @@ pub extern "C" fn add_c(a: i32, b: i32) -> i32 {
 | **C++ Header** | Native | Generated via `cbindgen` |
 | **Primary Tool** | `emcc` | `wasm-pack` |
 
-#### 3. Summary of your specific questions
+### 3. Summary of your specific questions
 
 - **Can Rust only create Wasm?** No, it creates the Wasm binary plus the JavaScript "glue" code required to load it (memory management, string conversion, etc.).
 - **Can it create JavaScript/TypeScript?** It creates JavaScript wrappers. It does not "transpile" Rust source code into pure JS; it always relies on the Wasm binary for the logic.
@@ -103,14 +92,14 @@ pub extern "C" fn add_c(a: i32, b: i32) -> i32 {
 
 Yes, Rust is widely used in the Python ecosystem, and you aren't limited to the manual `extern "C"` approach. While the C bridge is one way, the modern standard for Rust-Python integration is **PyO3**.
 
-#### 1. The PyO3 Approach (Recommended)
+### 1. The PyO3 Approach (Recommended)
 
 Instead of manually managing pointers and C types, you use the **PyO3** library. It allows you to write native Python modules in Rust. It feels very similar to the `wasm-bindgen` workflow you are already exploring.
 
 - **No Manual C Bridge:** PyO3 handles the conversion between Rust types (like `String`, `HashMap`, `Vec`) and Python objects (`str`, `dict`, `list`) automatically.
 - **Safety:** It manages the Python **GIL (Global Interpreter Lock)** for you, ensuring your Rust code interacts safely with the Python runtime.
 
-##### Example Code
+#### Example Code
 
 ```rust
 use pyo3::prelude::*;
@@ -129,7 +118,7 @@ fn my_rust_module(_py: Python, m: &PyModule) -> PyResult<()> {
 }
 ```
 
-#### 2. Packaging with Maturin
+### 2. Packaging with Maturin
 
 To actually use this in Python, you use a tool called **Maturin** (the Python equivalent of `wasm-pack`).
 
@@ -142,7 +131,7 @@ To actually use this in Python, you use a tool called **Maturin** (the Python eq
     print(my_rust_module.add_numbers(5, 10))  # Outputs 15
     ```
 
-#### 3. Comparing Your Three Targets
+### 3. Comparing Your Three Targets
 
 Since you want to support **C++**, **TypeScript (Wasm)**, and **Python**, here is how your architecture would look:
 
@@ -152,7 +141,7 @@ Since you want to support **C++**, **TypeScript (Wasm)**, and **Python**, here i
 | **TypeScript** | `wasm-pack` | Uses `#[wasm_bindgen]` to generate `.wasm` and `.d.ts`. |
 | **Python** | `maturin` | Uses `#[pyfunction]` / `#[pymodule]` via PyO3. |
 
-##### Can you use one function for all three?
+#### Can you use one function for all three?
 
 Technically, you *could* use the `extern "C"` bridge for Python via the `ctypes` or `cffi` libraries. However, this is generally discouraged because:
 
@@ -160,7 +149,7 @@ Technically, you *could* use the `extern "C"` bridge for Python via the `ctypes`
 2. **Complexity:** You have to manually handle memory and types in Python (like `ctypes.c_int32`).
 3. **DX:** With PyO3, your Rust library looks like a native, "pip-installable" Python package.
 
-### How can I use a library implemented in rust, in c++?
+## How can I use a library implemented in rust, in c++?
 
 > How can I use a Rust library in C++?
 
@@ -168,7 +157,7 @@ Using a Rust library in C++ is a common way to leverage Rust’s safety and perf
 
 Here is the high-level workflow for connecting them:
 
-#### 1. Prepare the Rust Library
+### 1. Prepare the Rust Library
 
 You must explicitly tell Rust to compile your functions in a way that C++ can understand.
 
@@ -185,7 +174,7 @@ pub extern "C" fn add_numbers(a: i32, b: i32) -> i32 {
 }
 ```
 
-#### 2. Generate C/C++ Headers
+### 2. Generate C/C++ Headers
 
 C++ needs to know the signatures of your Rust functions. You can write a `.h` file manually, but it is much safer to use **`cbindgen`**. It automatically scans your Rust code and generates the corresponding header file.
 
@@ -197,7 +186,7 @@ extern "C" {
 }
 ```
 
-#### 3. Use the Library in C++
+### 3. Use the Library in C++
 
 In your C++ file, you simply include the header and call the function as if it were a standard C function.
 
@@ -214,7 +203,7 @@ int main() {
 }
 ```
 
-#### 4. Build and Link
+### 4. Build and Link
 
 The final step is to compile the C++ code and link it against the compiled Rust library.
 
@@ -222,7 +211,7 @@ The final step is to compile the C++ code and link it against the compiled Rust 
 2. **Compile C++:** Use `g++` or `clang++`.
 3. **Link:** Ensure you link the system libraries that Rust depends on (like `dl`, `pthread`, and `rt` on Linux).
 
-#### Modern Tools to Make This Easier
+### Modern Tools to Make This Easier
 
 If you are doing more than just passing integers (e.g., passing strings, vectors, or complex objects), manual C-style bridging becomes very tedious and error-prone.
 
@@ -232,7 +221,7 @@ If you are doing more than just passing integers (e.g., passing strings, vectors
 | **cbindgen** | Simple projects where you just need C-style headers for Rust functions. |
 | **autocxx** | Experimental tool that tries to automate the `cxx` process even further by reading C++ headers directly. |
 
-#### Key Challenges to Watch For
+### Key Challenges to Watch For
 
 - **Memory Ownership:** Rust and C++ have different ways of managing memory. Never pass an object to C++ and let C++ `delete` it; always pass it back to a Rust function to be dropped correctly.
 - **Panic Handling:** If Rust code "panics," it can cause undefined behavior if it crosses the FFI boundary. Use `std::panic::catch_unwind` to wrap your exported functions.
@@ -244,9 +233,9 @@ Yes, it is possible, but it requires a very specific configuration. Because Emsc
 
 This ensures that both the C++ and Rust code agree on the memory layout, stack handling, and system calls.
 
-#### The Workflow: Rust Static Library -> Emscripten Linker
+### The Workflow: Rust Static Library -> Emscripten Linker
 
-##### 1. Setup the Rust Target
+#### 1. Setup the Rust Target
 
 First, ensure you have the Emscripten target installed for Rust:
 
@@ -254,7 +243,7 @@ First, ensure you have the Emscripten target installed for Rust:
 rustup target add wasm32-unknown-emscripten
 ```
 
-##### 2. Configure the Rust Library
+#### 2. Configure the Rust Library
 
 In your `Cargo.toml`, you must set the crate type to `staticlib`. This tells Rust to bundle everything into a `.a` file that the Emscripten linker (`emcc`) can understand.
 
@@ -272,7 +261,7 @@ pub extern "C" fn rust_add(a: i32, b: i32) -> i32 {
 }
 ```
 
-##### 3. Compile the Rust Code
+#### 3. Compile the Rust Code
 
 You must provide the Emscripten environment to Cargo so it links correctly.
 
@@ -282,7 +271,7 @@ cargo build --target wasm32-unknown-emscripten --release
 
 This produces a file at `target/wasm32-unknown-emscripten/release/librust_lib.a`.
 
-##### 4. Compile and Link with Emscripten (`emcc`)
+#### 4. Compile and Link with Emscripten (`emcc`)
 
 Now, treat the Rust `.a` file like any other C++ static library.
 
@@ -293,19 +282,19 @@ emcc main.cpp \
     -s WASM=1
 ```
 
-#### Critical Compatibility Rules
+### Critical Compatibility Rules
 
 - **Version Matching:** Ensure the version of Emscripten used by Rust (via `rustc`) matches the version of Emscripten you have installed on your system. If they are far apart, you may get "Undefined Symbol" errors during linking.
 - **The "Double Runtime" Problem:** Avoid using heavy standard library features in Rust (like complex networking or threading) if your C++ project also uses them. Both will try to link to Emscripten’s system hooks, which can bloat the `.wasm` file.
 - **Panic Handling:** Rust panics don't always translate cleanly to C++ exceptions in a Wasm environment. It is best to use `panic = "abort"` in your `Cargo.toml` to keep the binary small and behavior predictable.
 
-#### When should you NOT do this?
+### When should you NOT do this?
 
 If your goal is just to call Rust from a web page that *also* has C++, it is often easier to compile them as **two separate Wasm modules** and let them communicate via JavaScript. You should only use the "linking" method above if the C++ and Rust code need to share the same memory space or call each other thousands of times per second (low-latency interop).
 
 ---
 
-### Rust Wasm JSON Communication
+## Rust Wasm JSON Communication
 
 >I have a WebAssembly implementation in Rust. What is the usual way to communicate with a JSON object from TypeScript to the Rust web assembly? Can a JSON object be passed directly from TypeScript to the WASM and interpreted in Rust, or does it need to be serialised as a string first? If so, which Rust crate should be used to deserialise it?
 
@@ -319,11 +308,11 @@ Here is the breakdown of how to implement this.
 
 ---
 
-#### The Modern Way: `serde-wasm-bindgen`
+### The Modern Way: `serde-wasm-bindgen`
 
 This method is preferred because it produces smaller Wasm binaries and is generally faster than serializing/deserializing JSON strings.
 
-##### 1. The Rust Side (`lib.rs`)
+#### 1. The Rust Side (`lib.rs`)
 
 You will define a Rust struct that matches your TypeScript interface and derive `Deserialize`. Then, your exported function will accept a `JsValue`.
 
@@ -355,7 +344,7 @@ pub fn process_user(val: JsValue) -> Result<String, JsValue> {
 }
 ```
 
-##### 2. The TypeScript Side
+#### 2. The TypeScript Side
 
 You can simply pass the object. TypeScript will treat the Wasm function as if it accepts an `any` (or `JsValue`), but you can enforce types on your end.
 
@@ -385,7 +374,7 @@ async function run() {
 run();
 ```
 
-#### Required Dependencies (`Cargo.toml`)
+### Required Dependencies (`Cargo.toml`)
 
 To make the code above work, you need three specific crates in your `Cargo.toml`.
 
@@ -405,7 +394,7 @@ serde-wasm-bindgen = "0.6"
 
 ```
 
-#### Why not use `JSON.stringify`?
+### Why not use `JSON.stringify`?
 
 You *can* still use the "String" method (passing a string from TS and using `serde_json` in Rust), but it is generally discouraged for high-performance paths.
 
@@ -424,7 +413,7 @@ You *can* still use the "String" method (passing a string from TS and using `ser
 
 The only time you might prefer `JSON.stringify` is if your data is **extremely large** and complex. Occasionally, the browser's native C++ implementation of `JSON.stringify` combined with Rust's `serde_json` can outpace the `serde-wasm-bindgen` object traversal due to JIT optimizations, but for 99% of use cases (configs, typical data payloads), `serde-wasm-bindgen` is superior.
 
-#### Summary
+### Summary
 
 1. **Do not** serialize to a string in TypeScript.
 2. Use **`serde`** to define your structs in Rust.
@@ -432,7 +421,7 @@ The only time you might prefer `JSON.stringify` is if your data is **extremely l
 
 ---
 
-### Rust to WebAssembly Compilation Explained
+## Rust to WebAssembly Compilation Explained
 
 >A Web Assembly can be generated from Rust code. As I understand it, this process uses Emscripten behind the scenes. How does this work? Is the Rust code converted to C or C++ code before it is compiled using Emscripten? Can I convert Rust code to C or C++?
 
@@ -440,7 +429,7 @@ Your understanding is partially correct but relies on an older approach. While R
 
 Here is the breakdown of how the process actually works today, followed by an explanation of the C/C++ conversion question.
 
-#### 1. Does Rust use Emscripten?
+### 1. Does Rust use Emscripten?
 
 **Mostly no.**
 
@@ -449,7 +438,7 @@ In the early days of WebAssembly, Rust did rely on Emscripten to bridge the gap 
 - **The Old Way (Emscripten):** This target is called `wasm32-unknown-emscripten`. It is still useful if you are porting a mixed C/C++ and Rust codebase and need Emscripten's comprehensive "fake" POSIX operating system (file systems, blocking I/O simulation) in the browser.
 - **The Modern Way (LLVM):** This target is called `wasm32-unknown-unknown`. It produces a standalone `.wasm` binary without the heavy Emscripten runtime. This is what tools like `wasm-pack` and frameworks like Yew or Leptos use.
 
-#### 2. How does the compilation work? (The Pipeline)
+### 2. How does the compilation work? (The Pipeline)
 
 Rust does **not** convert your code to C or C++ before compiling to WebAssembly. Instead, it uses an "Intermediate Representation" (IR).
 
@@ -460,7 +449,7 @@ Here is the actual pipeline for a standard Rust-to-Wasm build:
 3. **LLVM IR**: Rust sends this logic to **LLVM** (the compiler infrastructure backbone). LLVM understands the logic in a generic, assembly-like format called "LLVM IR."
 4. **WebAssembly**: The LLVM WebAssembly backend turns that IR directly into binary WebAssembly (`.wasm`).
 
-#### 3. Can I convert Rust to C or C++?
+### 3. Can I convert Rust to C or C++?
 
 You asked if you *can* convert Rust to C/C++. The answer is **yes, but it is non-standard.**
 
@@ -470,7 +459,7 @@ The standard Rust compiler (`rustc`) does not support this. However, there is a 
 - **Why does it exist?** It is primarily used for **bootstrapping**. If you are on a new hardware architecture that has a C compiler but does not have a Rust compiler yet, you can use `mrustc` to turn the Rust compiler source code into C, compile that C code, and voila—you now have a native Rust compiler to start with.
 - **Should you use it for WebAssembly?** No. It adds an unnecessary step (Rust -> C -> Wasm) that would likely result in slower code and larger file sizes compared to the direct LLVM pipeline (Rust -> LLVM -> Wasm).
 
-#### Summary Table
+### Summary Table
 
 | Feature | Standard Rust Wasm (`wasm32-unknown-unknown`) | Legacy/Porting (`wasm32-unknown-emscripten`) |
 | --- | --- | --- |
