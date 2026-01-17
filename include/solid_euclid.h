@@ -329,6 +329,64 @@ CTriangularMesh create_cylinder_c(const char* cylinder_json);
 CTriangularMesh create_conical_frustum_c(const char* frustum_json);
 
 /* ============================================================================
+ * Extrude C API
+ * ============================================================================ */
+
+/**
+ * Creates a triangular mesh for an Extrude from a JSON string.
+ *
+ * An extrude is created by sweeping a 2D profile along the Y-axis.
+ * The extrusion goes from -height/2 to +height/2, centered at the origin.
+ *
+ * The extrude supports separate materials for:
+ * - Side faces (geometry_id based on profile segment IDs)
+ * - Bottom cap (geometry_id = -1)
+ * - Top cap (geometry_id = -2)
+ *
+ * @param extrude_json A null-terminated JSON string representing the extrude.
+ *
+ * Example JSON (simple square extrusion):
+ * @code
+ * {
+ *   "profile": {
+ *     "commands": [
+ *       { "path": { "Move": { "point": [0.0, 0.0] } }, "corner": "Edge" },
+ *       { "path": { "Line": { "point": [1.0, 0.0] } }, "corner": "Edge" },
+ *       { "path": { "Line": { "point": [1.0, 1.0] } }, "corner": "Edge" },
+ *       { "path": { "Line": { "point": [0.0, 1.0] } }, "corner": "Edge" },
+ *       { "path": { "Line": { "point": [0.0, 0.0] } }, "corner": "Edge" }
+ *     ]
+ *   },
+ *   "height": 2.0,
+ *   "sample_distance": 0.1,
+ *   "material": { "Uniform": "default" }
+ * }
+ * @endcode
+ *
+ * Example JSON (triangle with filleted corners):
+ * @code
+ * {
+ *   "profile": {
+ *     "commands": [
+ *       { "path": { "Move": { "point": [0.0, 0.0] } }, "corner": "Edge" },
+ *       { "path": { "Line": { "point": [1.0, 0.0] } }, "corner": { "Fillet": { "radius": 0.1 } } },
+ *       { "path": { "Line": { "point": [0.5, 0.866] } }, "corner": { "Fillet": { "radius": 0.1 } } },
+ *       { "path": { "Line": { "point": [0.0, 0.0] } }, "corner": { "Fillet": { "radius": 0.1 } } }
+ *     ]
+ *   },
+ *   "height": 1.5,
+ *   "sample_distance": 0.05,
+ *   "material": { "Uniform": "metal" }
+ * }
+ * @endcode
+ *
+ * @return A CTriangularMesh containing the mesh data organized by material.
+ *         Check the `error` field for any errors.
+ *         The caller must free the returned mesh using triangular_mesh_free().
+ */
+CTriangularMesh create_extrude_c(const char* extrude_json);
+
+/* ============================================================================
  * Memory Management
  * ============================================================================ */
 

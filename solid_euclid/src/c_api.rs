@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 use crate::geometry_model::GeometryModel;
 use crate::platonic_solid::Model as PlatonicSolidModel;
 use crate::sphere::Model as SphereModel;
-use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Torus};
+use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Extrude, Torus};
 use crate::triangular_mesh::TriangularMesh;
 
 /// Returns a C-compatible string with the hello message.
@@ -584,6 +584,106 @@ pub unsafe extern "C" fn create_conical_frustum_c(frustum_json: *const c_char) -
         };
 
         match frustum.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
+    }
+}
+
+// =============================================================================
+// Extrude C API
+// =============================================================================
+
+/// Creates a triangular mesh for an Extrude from a JSON string.
+///
+/// An extrude is created by sweeping a 2D profile along the Y-axis.
+/// The extrusion goes from -height/2 to +height/2, centered at the origin.
+///
+/// The extrude supports separate materials for:
+/// - Side faces (geometry_id based on profile segment IDs)
+/// - Bottom cap (geometry_id = -1)
+/// - Top cap (geometry_id = -2)
+///
+/// # Arguments
+/// * `extrude_json` - A null-terminated JSON string representing the extrude.
+///
+/// # Example JSON (simple square extrusion)
+/// ```json
+/// {
+///   "profile": {
+///     "commands": [
+///       { "path": { "Move": { "point": [0.0, 0.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [1.0, 0.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [1.0, 1.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [0.0, 1.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [0.0, 0.0] } }, "corner": "Edge" }
+///     ]
+///   },
+///   "height": 2.0,
+///   "sample_distance": 0.1,
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Example JSON (triangle with filleted corners)
+/// ```json
+/// {
+///   "profile": {
+///     "commands": [
+///       { "path": { "Move": { "point": [0.0, 0.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [1.0, 0.0] } }, "corner": { "Fillet": { "radius": 0.1 } } },
+///       { "path": { "Line": { "point": [0.5, 0.866] } }, "corner": { "Fillet": { "radius": 0.1 } } },
+///       { "path": { "Line": { "point": [0.0, 0.0] } }, "corner": { "Fillet": { "radius": 0.1 } } }
+///     ]
+///   },
+///   "height": 1.5,
+///   "sample_distance": 0.05,
+///   "material": { "Uniform": "metal" }
+/// }
+/// ```
+///
+/// # Example JSON (with chamfered corners)
+/// ```json
+/// {
+///   "profile": {
+///     "commands": [
+///       { "path": { "Move": { "point": [0.0, 0.0] } }, "corner": "Edge" },
+///       { "path": { "Line": { "point": [1.0, 0.0] } }, "corner": { "Chamfer": { "distance": 0.1 } } },
+///       { "path": { "Line": { "point": [1.0, 1.0] } }, "corner": { "Chamfer": { "distance": 0.1 } } },
+///       { "path": { "Line": { "point": [0.0, 1.0] } }, "corner": { "Chamfer": { "distance": 0.1 } } },
+///       { "path": { "Line": { "point": [0.0, 0.0] } }, "corner": { "Chamfer": { "distance": 0.1 } } }
+///     ]
+///   },
+///   "height": 2.0,
+///   "sample_distance": 0.1,
+///   "material": { "Uniform": "default" }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_extrude_c(extrude_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if extrude_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(extrude_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let extrude: Extrude = match serde_json::from_str(json_str) {
+            Ok(e) => e,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match extrude.to_triangular_mesh() {
             Ok(mesh) => triangular_mesh_to_c(mesh),
             Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
         }
@@ -1821,6 +1921,230 @@ mod tests {
             }
 
             triangular_mesh_free(mesh);
+        }
+    }
+
+    // =============================================================================
+    // Extrude C API Tests
+    // =============================================================================
+
+    // Helper function to create square extrude JSON
+    fn square_extrude_json(material: &str) -> String {
+        format!(
+            r#"{{"profile":{{"commands":[{{"path":{{"Move":{{"point":[0.0,0.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[1.0,0.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[1.0,1.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[0.0,1.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[0.0,0.0]}}}},"corner":"Edge"}}]}},"height":2.0,"sample_distance":0.1,"material":{}}}"#,
+            material
+        )
+    }
+
+    #[test]
+    fn test_create_extrude_c_square_uniform() {
+        let json = CString::new(square_extrude_json(r#"{"Uniform":"default"}"#)).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert!(geom.vertices_len > 0);
+            assert!(geom.indices_len > 0);
+            assert!(geom.indices_len / 3 > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_null_json() {
+        let mesh = unsafe { create_extrude_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_default_material() {
+        let json = CString::new(square_extrude_json(r#""Default""#)).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        // Default material creates separate materials for each profile segment and caps
+        assert!(mesh.entries_len >= 3);
+
+        unsafe { triangular_mesh_free(mesh) };
+    }
+
+    #[test]
+    fn test_create_extrude_c_triangle_profile() {
+        let json = CString::new(
+            r#"{"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[0.5,0.866]}},"corner":"Edge"},{"path":{"Line":{"point":[0.0,0.0]}},"corner":"Edge"}]},"height":1.5,"sample_distance":0.1,"material":{"Uniform":"metal"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "metal");
+            assert!(entry.geometry.vertices_len > 0);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_filleted_corners() {
+        let json = CString::new(
+            r#"{"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[1.0,1.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[0.0,1.0]}},"corner":{"Fillet":{"radius":0.1}}},{"path":{"Line":{"point":[0.0,0.0]}},"corner":{"Fillet":{"radius":0.1}}}]},"height":2.0,"sample_distance":0.05,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            assert!(geom.vertices_len > 0);
+            // Filleted corners should produce more vertices
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_chamfered_corners() {
+        let json = CString::new(
+            r#"{"profile":{"commands":[{"path":{"Move":{"point":[0.0,0.0]}},"corner":"Edge"},{"path":{"Line":{"point":[1.0,0.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[1.0,1.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[0.0,1.0]}},"corner":{"Chamfer":{"distance":0.1}}},{"path":{"Line":{"point":[0.0,0.0]}},"corner":{"Chamfer":{"distance":0.1}}}]},"height":2.0,"sample_distance":0.1,"material":{"Uniform":"default"}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            assert!(geom.vertices_len > 0);
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_extrude_c_geometry_data_consistent() {
+        let json = CString::new(square_extrude_json(r#"{"Uniform":"default"}"#)).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+
+            // vertices and normals should have same length (3 components each)
+            assert_eq!(geom.vertices_len, geom.normals_len);
+            // uvs should have 2/3 the length of vertices (2 components vs 3)
+            assert_eq!(geom.uvs_len * 3, geom.vertices_len * 2);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_extrude_c_normals_normalized() {
+        let json = CString::new(square_extrude_json(r#"{"Uniform":"default"}"#)).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+
+            for i in (0..normals.len()).step_by(3) {
+                let nx = normals[i];
+                let ny = normals[i + 1];
+                let nz = normals[i + 2];
+                let length = (nx * nx + ny * ny + nz * nz).sqrt();
+                assert!(
+                    (length - 1.0).abs() < 0.001,
+                    "Normal not normalized: length = {}",
+                    length
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_extrude_c_indices_within_bounds() {
+        let json = CString::new(square_extrude_json(r#"{"Uniform":"default"}"#)).unwrap();
+        let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null());
+        unsafe {
+            let entry = &*mesh.entries;
+            let geom = &entry.geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_extrude_c_different_heights() {
+        for height in ["0.5", "1.0", "2.0", "5.0"] {
+            let json = CString::new(format!(
+                r#"{{"profile":{{"commands":[{{"path":{{"Move":{{"point":[0.0,0.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[1.0,0.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[1.0,1.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[0.0,1.0]}}}},"corner":"Edge"}},{{"path":{{"Line":{{"point":[0.0,0.0]}}}},"corner":"Edge"}}]}},"height":{},"sample_distance":0.1,"material":{{"Uniform":"default"}}}}"#,
+                height
+            ))
+            .unwrap();
+            let mesh = unsafe { create_extrude_c(json.as_ptr()) };
+
+            assert!(
+                mesh.error.is_null(),
+                "Expected no error for height {}",
+                height
+            );
+            unsafe {
+                let geom = &(*mesh.entries).geometry;
+                assert!(geom.vertices_len > 0);
+                triangular_mesh_free(mesh);
+            }
         }
     }
 }
