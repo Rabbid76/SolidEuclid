@@ -12,6 +12,7 @@ pub mod polygon_mesh;
 pub mod sphere;
 pub mod sweep_model;
 pub mod sweeps;
+pub mod transform;
 pub mod triangular_mesh;
 pub mod vertex;
 pub mod web_api;
