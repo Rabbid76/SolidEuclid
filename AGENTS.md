@@ -6,7 +6,7 @@
 
 1. **Load matching skills.** Check the [On-Demand Skills](#on-demand-skills) catalog and read every skill file whose domain matches the task _before_ taking action. Multiple skills may apply to one task.
 2. **Read the matching skill for the layer you touch.** The Rust core and the mesh pipeline: [`.agents/skills/solid-euclid-geometry-model.md`](./.agents/skills/solid-euclid-geometry-model.md). The WASM web API and `examples/web`: [`.agents/skills/solid-euclid-web-api.md`](./.agents/skills/solid-euclid-web-api.md). The C bridge and `examples/cpp`: [`.agents/skills/solid-euclid-c-api.md`](./.agents/skills/solid-euclid-c-api.md). Read [`README.md`](./README.md) before answering architecture or domain questions.
-3. **Read [`.agents/README.md`](./.agents/README.md)** for the complete digital brain index, separating living reference from historical records.
+3. **Read [`.agents/README.md`](./.agents/README.md)** for the complete digital brain index, separating living reference from historical records. For a map of the codebase (modules, geometry types, mesh pipeline, bridges) read [`.agents/architecture.md`](./.agents/architecture.md); for build, test, lint, debug and deployment commands read [`.agents/development-guide.md`](./.agents/development-guide.md).
 4. **Treat documentation as part of the task, not a follow-up.** Every analysis produces a document, and every change to productive code updates one — see [Where Documentation Goes](#where-documentation-goes).
 5. **For GitHub Copilot users:** See [`.github/copilot-instructions.md`](./.github/copilot-instructions.md) for Copilot-specific guidance.
 
@@ -103,6 +103,10 @@ TypeScript) and `examples/cpp/` (CMake, C++23).
 
 ## Repository Structure
 
+For a module-level map of the codebase (what each source file does, how geometry types connect,
+how data flows through the mesh pipeline and bridges) see
+[`.agents/architecture.md`](./.agents/architecture.md).
+
 ```
 .
 ├── solid_euclid/                 # The Rust crate (workspace member, edition 2024)
@@ -143,6 +147,8 @@ TypeScript) and `examples/cpp/` (CMake, C++23).
 ├── copilot-instructions.md       # Redirect to .github/copilot-instructions.md
 ├── .agents/                      # Digital Brain - AI agent knowledge base
 │   ├── README.md                 # Digital brain index
+│   ├── architecture.md           # Codebase map: modules, geometry, mesh pipeline, bridges
+│   ├── development-guide.md      # Build, test, lint, debug, deploy commands
 │   ├── backlog/                  # Open work only
 │   │   └── README.md
 │   ├── bug-analysis/             # Bug root-cause analyses
@@ -268,6 +274,8 @@ The `.agents/` folder serves as the "digital brain" for SolidEuclid, containing:
 ```
 .agents/
 ├── README.md                     # Digital brain index
+├── architecture.md               # Codebase map: modules, geometry, mesh pipeline, bridges
+├── development-guide.md          # Build, test, lint, debug, deploy commands
 ├── backlog/                      # Open work only
 ├── bug-analysis/                 # Bug root-cause analyses (written before fix)
 ├── decisions/                    # Architecture decision records (ADRs)
@@ -293,16 +301,16 @@ Each analysis document follows the same lifecycle: written **before** the work, 
 
 **Every analysis names the affected layers first.** A bug, feature or refactoring analysis starts, right after its header block, with a short list of the layers the work changes, one line each saying what changes there: the Rust core (`solid_euclid`), the C bridge (`c_api.rs`, `include/solid_euclid.h`), the web API (`web_api.rs`, `pkg`), the web examples (`examples/web`), the C++ examples (`examples/cpp`). A layer the work leaves unchanged is named only where a reader would expect a change.
 
-| What you produced                  | Where it goes                                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------------------------- |
-| Bug analysis                       | new file in `.agents/bug-analysis/` with kebab-case slug                                      |
-| Feature analysis                   | new file in `.agents/feature-analysis/` with kebab-case slug                                  |
-| Refactoring analysis               | new file in `.agents/refactoring-analysis/` with kebab-case slug                              |
-| Benchmark and performance analysis | new file in `.agents/benchmarks/` with kebab-case slug (create the folder with the first one) |
-| New feature capability             | `README.md`, or the rustdoc of the public items, plus the matching skill file                 |
-| Architecture decisions             | Create a numbered ADR in `.agents/decisions/`                                                 |
-| Open work                          | `.agents/backlog/README.md`                                                                   |
-| Living reference                   | `README.md` and rustdoc for users, `.agents/skills/` for agent-facing domain knowledge        |
+| What you produced                  | Where it goes                                                                                                                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bug analysis                       | new file in `.agents/bug-analysis/` with kebab-case slug                                                                                                                     |
+| Feature analysis                   | new file in `.agents/feature-analysis/` with kebab-case slug                                                                                                                 |
+| Refactoring analysis               | new file in `.agents/refactoring-analysis/` with kebab-case slug                                                                                                             |
+| Benchmark and performance analysis | new file in `.agents/benchmarks/` with kebab-case slug (create the folder with the first one)                                                                                |
+| New feature capability             | `README.md`, or the rustdoc of the public items, plus the matching skill file                                                                                                |
+| Architecture decisions             | Create a numbered ADR in `.agents/decisions/`                                                                                                                                |
+| Open work                          | `.agents/backlog/README.md`                                                                                                                                                  |
+| Living reference                   | `README.md` and rustdoc for users, `.agents/skills/` for agent-facing domain knowledge, `.agents/architecture.md` and `.agents/development-guide.md` for codebase navigation |
 
 **Important**: Analysis documents in `.agents/bug-analysis/`, `.agents/feature-analysis/`, and `.agents/refactoring-analysis/` are **historical records** — they document the analysis process and decisions, but the durable knowledge should be promoted to living-reference documentation in the skill files or the rustdoc.
 
@@ -316,6 +324,9 @@ Each analysis document follows the same lifecycle: written **before** the work, 
 **A solved bug keeps no analysis.** Once its fix has landed on `main`, the valuable content is promoted and the document deleted, and the bug's item leaves the backlog.
 
 ## Development Workflow
+
+For the full command reference (build, test, lint, debug, deployment, project layout, common
+pitfalls) see [`.agents/development-guide.md`](./.agents/development-guide.md).
 
 ### Checks Before Committing
 
