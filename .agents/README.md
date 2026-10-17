@@ -92,9 +92,9 @@ One document per bug: root-cause analysis written **before** the fix, closed out
 One document per feature question: a proposed feature, a change to an existing one, or _why_ a
 feature behaves the way it does. Written **before** the work, closed out **after** it.
 
-| Document                                                           | Status | Last touched |
-| ------------------------------------------------------------------ | ------ | ------------ |
-| [Model transformations](feature-analysis/model-transformations.md) | Open   | 2026-10-17   |
+| Document                                                           | Status      | Last touched |
+| ------------------------------------------------------------------ | ----------- | ------------ |
+| [Model transformations](feature-analysis/model-transformations.md) | Implemented | 2026-10-17   |
 
 ### Refactoring Analyses
 

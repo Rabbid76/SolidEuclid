@@ -41,8 +41,8 @@ without a header declaration (or the reverse) is a bug.
 --release`) and links it into the C++ examples (C++23). `examples/cpp/CMakeLists.txt` adds the
   example executable and the `solid_euclid_tests` doctest executable.
 - **Tests** — doctest, one file per geometry type in `examples/cpp/tests/` (`test-platonic-solid.cpp`,
-  `test-sphere.cpp`, `test-sweeps.cpp`, …). A new test file must be added to the
-  `add_executable(solid_euclid_tests …)` list in `examples/cpp/CMakeLists.txt`.
+  `test-sphere.cpp`, `test-sweeps.cpp`, `test-transform.cpp`, …). A new test file must be added to
+  the `add_executable(solid_euclid_tests …)` list in `examples/cpp/CMakeLists.txt`.
 - **Run** — `npm run test:cpp` (cmake build of the `solid_euclid_tests` target, then runs it).
   `npm run test:all` runs the Rust, web and C++ suites.
 - **Formatting** — `.clang-format` / `.clang-tidy` govern the C++ code; `npm run format:cpp`

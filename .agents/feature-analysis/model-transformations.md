@@ -1,9 +1,8 @@
 # Feature Analysis: Model Transformations
 
-- **Status:** Open
+- **Status:** Implemented
 - **Branch:** `feat/csg`
 - **Date:** 2026-10-17
-- **Backlog:** [`.agents/backlog/transformations.md`](../backlog/transformations.md)
 
 ## Layers affected
 

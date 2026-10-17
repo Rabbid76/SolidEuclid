@@ -27,19 +27,27 @@ vitest suite. Load this skill for changes to the web API, `examples/web`, wasm-p
 One `create_*` function per geometry type. Each converts through `to_triangular_mesh()` and returns
 a `WasmTriangularMesh` — with one exception, noted after the table:
 
-| Function                          | Model                           |
-| --------------------------------- | ------------------------------- |
-| `create_platonic_solid(model)`    | `platonic_solid::Model`         |
-| `create_sphere(model)`            | `sphere::Model`                 |
-| `create_torus(torus)`             | `sweeps::Torus`                 |
-| `create_capsule(capsule)`         | `sweeps::Capsule`               |
-| `create_cylinder(cylinder)`       | `sweeps::Cylinder`              |
-| `create_conical_frustum(frustum)` | `sweeps::ConicalFrustum`        |
-| `create_extrude(extrude)`         | `sweeps::Extrude`               |
-| `create_planar_profile(profile)`  | `planar_profile::PlanarProfile` |
+| Function                          | Model                                   |
+| --------------------------------- | --------------------------------------- |
+| `create_platonic_solid(model)`    | `platonic_solid::Model`                 |
+| `create_sphere(model)`            | `sphere::Model`                         |
+| `create_torus(torus)`             | `sweeps::Torus`                         |
+| `create_capsule(capsule)`         | `sweeps::Capsule`                       |
+| `create_cylinder(cylinder)`       | `sweeps::Cylinder`                      |
+| `create_conical_frustum(frustum)` | `sweeps::ConicalFrustum`                |
+| `create_extrude(extrude)`         | `sweeps::Extrude`                       |
+| `create_transform(model)`         | `transform::Transform<model::AnyModel>` |
+| `create_planar_profile(profile)`  | `planar_profile::PlanarProfile`         |
 
 Plus `get_platonic_solid_types()` / `get_sphere_types()` returning `js_sys::Array` of the variant
 names, and `hello_wasm()`.
+
+`create_transform` takes a `Transform<AnyModel>`: `{ transformation, model }` where `transformation`
+is one of `Matrix` (flat column-major array of 16), `Quaternion` (`[x, y, z, w]`), `Translation`
+(`[x, y, z]`), `UniformScale` (number), `ScaleXYZ` (`[x, y, z]`), `RotationX`/`RotationY`/
+`RotationZ` (radians), and `model` is any `AnyModel` variant — including `Transform`, so
+transformations nest. A mirroring transformation (negative scale determinant) flips the polygon
+winding; NaN or infinite parameters throw.
 
 `create_planar_profile` is the exception: it parses a `PlanarProfile` and returns it reserialized as
 `JsValue` for use with `create_extrude`
@@ -59,8 +67,8 @@ wasmBuffer })`; each test calls the `create_*` function and asserts `geometry_co
 ## Example pages
 
 - One folder per geometry type under `examples/web/` (`platonic_solid/`, `sphere/`, `sweeps/`,
-  `extrude/`), each with an `index.html` and a `main.ts` rendering the mesh with three.js via
-  `examples/web/util/three-util.ts`.
+  `extrude/`, `transform/`), each with an `index.html` and a `main.ts` rendering the mesh with
+  three.js via `examples/web/util/three-util.ts`.
 - A new page needs an entry in `rollupOptions.input` of `vite.config.ts` or it is not built.
 - **Run** — `npm run dev` (builds the wasm, starts vite, opens the browser); `npm run build`
   produces `dist/`; `npm run preview` serves it.

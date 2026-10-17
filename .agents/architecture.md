@@ -32,20 +32,23 @@ All geometry logic lives in `solid_euclid/src/`. Every module is `pub mod`-decla
 | `Vertex` / `Index`                      | `solid_euclid/src/vertex.rs`          | f64 vertex (position, normal, uv); `Index = i32`                                                                                         |
 | `Material`                              | `solid_euclid/src/material.rs`        | Material assignment: `Default`, `Uniform(String)`, `Map { default, face_map }`, `Array(Vec<String>)`                                     |
 | `GeometryError`                         | `solid_euclid/src/geometry_error.rs`  | The crate error type: `InsufficientVertices`, `NotYetImplemented`, `InvalidParameter`                                                    |
-| `GeometryHash`                          | `solid_euclid/src/geometry_hash.rs`   | SHA256 over `PolygonMesh` and `TriangularMesh` (values rounded to 3 decimals)                                                            |
+| `GeometryHash`                          | `solid_euclid/src/geometry_hash.rs`   | SHA256 over `PolygonMesh`, `TriangularMesh`, `Transform<T>` and `AnyModel` (values rounded to 3 decimals)                                |
 | `Plane`                                 | `solid_euclid/src/plane.rs`           | 3D plane (origin, normal, x-axis) with orthonormalized transformation matrix                                                             |
+| `AnyModel`                              | `solid_euclid/src/model.rs`           | Serde enum of every geometry type plus a `Transform` variant — the bridge-facing deserialization target for generic wrappers             |
 
 ### Geometry types (implement `GeometryModel`)
 
-| Geometry        | Module                               | Struct                                                                                            | Description                                                                            |
-| --------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Platonic solids | `solid_euclid/src/platonic_solid.rs` | `Model { geometry: PlatonicSolid, material: Material }`                                           | Tetrahedron, Hexahedron, Octahedron, Dodecahedron, Icosahedron                         |
-| Sphere          | `solid_euclid/src/sphere.rs`         | `Model { geometry: Sphere, material: Material }`                                                  | UV sphere (`Slices { slices, segments }`) and cube-mapped sphere (`Cube { segments }`) |
-| Torus           | `solid_euclid/src/sweeps.rs`         | `Torus { major_radius, minor_radius, major_segments, minor_segments, material }`                  | Donut shape via sweep of a circular profile along a circular path                      |
-| Capsule         | `solid_euclid/src/sweeps.rs`         | `Capsule { radius, height, segments, material }`                                                  | Cylinder with hemispherical caps; 3 material regions (bottom, body, top)               |
-| Cylinder        | `solid_euclid/src/sweeps.rs`         | `Cylinder { radius, height, segments, bottom_edge, top_edge, material }`                          | Special case of `ConicalFrustum` with equal radii; 5 material regions                  |
-| Conical frustum | `solid_euclid/src/sweeps.rs`         | `ConicalFrustum { bottom_radius, top_radius, height, segments, bottom_edge, top_edge, material }` | Truncated cone; 5 material regions (bottom cap, bottom edge, body, top edge, top cap)  |
-| Extrude         | `solid_euclid/src/sweeps.rs`         | `Extrude { profile: PlanarProfile, height, sample_distance, material }`                           | 2D profile extruded along Y-axis with bottom/top caps                                  |
+| Geometry        | Module                               | Struct                                                                                            | Description                                                                                                            |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Platonic solids | `solid_euclid/src/platonic_solid.rs` | `Model { geometry: PlatonicSolid, material: Material }`                                           | Tetrahedron, Hexahedron, Octahedron, Dodecahedron, Icosahedron                                                         |
+| Sphere          | `solid_euclid/src/sphere.rs`         | `Model { geometry: Sphere, material: Material }`                                                  | UV sphere (`Slices { slices, segments }`) and cube-mapped sphere (`Cube { segments }`)                                 |
+| Torus           | `solid_euclid/src/sweeps.rs`         | `Torus { major_radius, minor_radius, major_segments, minor_segments, material }`                  | Donut shape via sweep of a circular profile along a circular path                                                      |
+| Capsule         | `solid_euclid/src/sweeps.rs`         | `Capsule { radius, height, segments, material }`                                                  | Cylinder with hemispherical caps; 3 material regions (bottom, body, top)                                               |
+| Cylinder        | `solid_euclid/src/sweeps.rs`         | `Cylinder { radius, height, segments, bottom_edge, top_edge, material }`                          | Special case of `ConicalFrustum` with equal radii; 5 material regions                                                  |
+| Conical frustum | `solid_euclid/src/sweeps.rs`         | `ConicalFrustum { bottom_radius, top_radius, height, segments, bottom_edge, top_edge, material }` | Truncated cone; 5 material regions (bottom cap, bottom edge, body, top edge, top cap)                                  |
+| Extrude         | `solid_euclid/src/sweeps.rs`         | `Extrude { profile: PlanarProfile, height, sample_distance, material }`                           | 2D profile extruded along Y-axis with bottom/top caps                                                                  |
+| Transform       | `solid_euclid/src/transform.rs`      | `Transform<T> { transformation: Transformation, model: T }`                                       | Applies a matrix/quaternion/translation/scale/rotation to any model; flips winding on mirroring (negative determinant) |
+| Any model       | `solid_euclid/src/model.rs`          | `AnyModel` enum                                                                                   | Match-and-delegate wrapper over every geometry type + nested `Transform`                                               |
 
 ### Supporting geometry modules
 
@@ -103,6 +106,7 @@ TriangularMesh (f32, per-material triangle soups)
 | `create_cylinder_c`          | JSON string       | `CTriangularMesh`     |
 | `create_conical_frustum_c`   | JSON string       | `CTriangularMesh`     |
 | `create_extrude_c`           | JSON string       | `CTriangularMesh`     |
+| `create_transform_c`         | JSON string       | `CTriangularMesh`     |
 | `get_platonic_solid_types_c` | —                 | JSON array string     |
 | `get_sphere_types_c`         | —                 | JSON array string     |
 | `hello_c`                    | —                 | string                |
@@ -125,6 +129,7 @@ arrays + u32 indices), `CTriangularMeshEntry` (material_id string + geometry), `
 | `create_cylinder`          | `JsValue` | `WasmTriangularMesh`                      |
 | `create_conical_frustum`   | `JsValue` | `WasmTriangularMesh`                      |
 | `create_extrude`           | `JsValue` | `WasmTriangularMesh`                      |
+| `create_transform`         | `JsValue` | `WasmTriangularMesh`                      |
 | `create_planar_profile`    | `JsValue` | `JsValue` (reserialized profile, no mesh) |
 | `get_platonic_solid_types` | —         | `js_sys::Array`                           |
 | `get_sphere_types`         | —         | `js_sys::Array`                           |
@@ -136,18 +141,19 @@ arrays + u32 indices), `CTriangularMeshEntry` (material_id string + geometry), `
 
 ## Examples
 
-| Location                  | Technology                   | Contents                                                                                                                |
-| ------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `examples/web/`           | Vite + three.js (TypeScript) | One page per geometry type: `platonic_solid/`, `sphere/`, `sweeps/`, `extrude/`; shared helpers in `util/three-util.ts` |
-| `examples/web/__tests__/` | vitest                       | One test file per geometry type, exercising the WASM API                                                                |
-| `examples/cpp/`           | CMake + doctest (C++23)      | `main.cpp` example; `tests/` with one file per geometry type                                                            |
+| Location                  | Technology                   | Contents                                                                                                                              |
+| ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `examples/web/`           | Vite + three.js (TypeScript) | One page per geometry type: `platonic_solid/`, `sphere/`, `sweeps/`, `extrude/`, `transform/`; shared helpers in `util/three-util.ts` |
+| `examples/web/__tests__/` | vitest                       | One test file per geometry type, exercising the WASM API                                                                              |
+| `examples/cpp/`           | CMake + doctest (C++23)      | `main.cpp` example; `tests/` with one file per geometry type                                                                          |
 
 ## Key invariants
 
 - **f64 inside, f32 at the boundary** — the kernel uses `glam::DVec3`/`DVec2`; only the
   `TriangularMesh` stores f32.
 - **Winding** — polygon normals come from the cross product of the first three vertices; front
-  faces are counter-clockwise seen from outside.
+  faces are counter-clockwise seen from outside. A mirroring transformation (negative determinant)
+  reverses the polygon indices so faces stay outward-facing.
 - **Convex polygons** — `add_convex_polygon_from_vertices` assumes convex; concave outlines with
   holes go through the earcut path in `planar_contour.rs`.
 - **Error handling** — fallible conversions return `GeometryError`; the bridges convert it at
