@@ -17,5 +17,14 @@ export default tseslint.config(
       'solid_euclid/target/',
       'target/',
     ],
+  },
+  {
+    files: ['.agents/scripts/**/*.js'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
   }
 );
