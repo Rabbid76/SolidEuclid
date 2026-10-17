@@ -387,6 +387,63 @@ CTriangularMesh create_conical_frustum_c(const char* frustum_json);
 CTriangularMesh create_extrude_c(const char* extrude_json);
 
 /* ============================================================================
+ * Transform C API
+ * ============================================================================ */
+
+/**
+ * Creates a triangular mesh for a transformed model from a JSON string.
+ *
+ * A transform applies a transformation (matrix, quaternion, translation, scale,
+ * or axis rotation) to any geometry model. Transformations can be nested by
+ * wrapping an already transformed model in another transformation.
+ *
+ * A mirroring transformation (negative scale determinant) reverses the polygon
+ * winding so faces keep their outward orientation. NaN or infinite transformation
+ * parameters are rejected with an error.
+ *
+ * @param model_json A null-terminated JSON string representing the transform.
+ *
+ * Example JSON (hexahedron translated by (1, 2, 3)):
+ * @code
+ * {
+ *   "transformation": { "Translation": [1.0, 2.0, 3.0] },
+ *   "model": {
+ *     "PlatonicSolid": {
+ *       "geometry": "Hexahedron",
+ *       "material": { "Uniform": "default" }
+ *     }
+ *   }
+ * }
+ * @endcode
+ *
+ * Example JSON (nested transformations: scale a torus, then translate it):
+ * @code
+ * {
+ *   "transformation": { "Translation": [0.0, 0.0, 5.0] },
+ *   "model": {
+ *     "Transform": {
+ *       "transformation": { "ScaleXYZ": [1.0, 2.0, 1.0] },
+ *       "model": {
+ *         "Torus": {
+ *           "major_radius": 2.0,
+ *           "minor_radius": 0.5,
+ *           "major_segments": 32,
+ *           "minor_segments": 16,
+ *           "material": { "Uniform": "metal" }
+ *         }
+ *       }
+ *     }
+ *   }
+ * }
+ * @endcode
+ *
+ * @return A CTriangularMesh containing the mesh data organized by material.
+ *         Check the `error` field for any errors.
+ *         The caller must free the returned mesh using triangular_mesh_free().
+ */
+CTriangularMesh create_transform_c(const char* model_json);
+
+/* ============================================================================
  * Memory Management
  * ============================================================================ */
 

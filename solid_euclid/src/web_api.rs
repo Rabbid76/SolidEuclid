@@ -1,10 +1,12 @@
 use wasm_bindgen::prelude::*;
 
 use crate::geometry_model::GeometryModel;
+use crate::model::AnyModel;
 use crate::planar_profile::PlanarProfile;
 use crate::platonic_solid::Model;
 use crate::sphere::Model as SphereModel;
 use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Extrude, Torus};
+use crate::transform::Transform;
 use crate::triangular_mesh::TriangularMesh;
 
 #[wasm_bindgen]
@@ -507,6 +509,75 @@ pub fn create_extrude(extrude: JsValue) -> Result<WasmTriangularMesh, JsError> {
     Ok(triangular_mesh_to_wasm(triangular_mesh))
 }
 
+/// Creates a triangular mesh for a transformed model from a JavaScript object.
+///
+/// A transform applies a [`Transformation`](crate::transform::Transformation) (matrix,
+/// quaternion, translation, scale, or axis rotation) to any geometry model. The model
+/// is given as an [`AnyModel`](crate::model::AnyModel), which covers every geometry
+/// type in the kernel. Transformations can be nested by wrapping an already
+/// transformed model in another transformation.
+///
+/// A mirroring transformation (negative scale determinant) reverses the polygon
+/// winding so faces keep their outward orientation. NaN or infinite transformation
+/// parameters are rejected with an error.
+///
+/// # Arguments
+/// * `model` - A JavaScript object representing a `Transform<AnyModel>` with the
+///   following fields:
+///   - `transformation`: One of `Matrix`, `Quaternion`, `Translation`, `UniformScale`,
+///     `ScaleXYZ`, `RotationX`, `RotationY`, `RotationZ`. Vectors serialize as
+///     `[x, y, z]` arrays, quaternions as `[x, y, z, w]`, matrices as a flat
+///     column-major array of 16 elements.
+///   - `model`: The inner model as an `AnyModel` variant, e.g.
+///     `{ "PlatonicSolid": { "geometry": "Hexahedron", "material": { "Uniform": "default" } } }`
+///
+/// # Example TypeScript
+/// ```typescript
+/// // A hexahedron translated by (1, 2, 3)
+/// const mesh = create_transform({
+///   transformation: { Translation: [1.0, 2.0, 3.0] },
+///   model: {
+///     PlatonicSolid: {
+///       geometry: "Hexahedron",
+///       material: { Uniform: "default" }
+///     }
+///   }
+/// });
+///
+/// // A torus scaled non-uniformly and rotated around the Z-axis, then translated
+/// const rotated = create_transform({
+///   transformation: { RotationZ: Math.PI / 4 },
+///   model: {
+///     Torus: { major_radius: 2.0, minor_radius: 0.5, major_segments: 32, minor_segments: 16, material: { Uniform: "metal" } }
+///   }
+/// });
+/// const moved = create_transform({
+///   transformation: { Translation: [0.0, 0.0, 5.0] },
+///   model: {
+///     Transform: {
+///       transformation: { ScaleXYZ: [1.0, 2.0, 1.0] },
+///       model: {
+///         Torus: { major_radius: 2.0, minor_radius: 0.5, major_segments: 32, minor_segments: 16, material: { Uniform: "metal" } }
+///       }
+///     }
+///   }
+/// });
+/// ```
+///
+/// # Returns
+/// A `WasmTriangularMesh` containing the mesh data organized by material.
+#[wasm_bindgen]
+pub fn create_transform(model: JsValue) -> Result<WasmTriangularMesh, JsError> {
+    let transform: Transform<AnyModel> = serde_wasm_bindgen::from_value(model)
+        .map_err(|e| JsError::new(&format!("Failed to parse transform: {}", e)))?;
+
+    let triangular_mesh = transform
+        .to_triangular_mesh()
+        .map_err(|e| JsError::new(&format!("Failed to create transform mesh: {:?}", e)))?;
+
+    Ok(triangular_mesh_to_wasm(triangular_mesh))
+}
+
 /// Creates a PlanarProfile from a JavaScript object.
 ///
 /// This is a utility function for creating profiles programmatically from JavaScript.
@@ -531,7 +602,7 @@ mod tests {
     use crate::planar_profile::{Corner, PathCommand, ProfileCommand};
     use crate::platonic_solid::{Material, PlatonicSolid};
     use crate::sphere::Sphere;
-    use glam::DVec2;
+    use glam::{DVec2, DVec3};
 
     #[test]
     fn test_hello_wasm() {
@@ -2468,5 +2539,260 @@ mod tests {
             geo.triangle_count() > 10,
             "Should have many triangles for chamfered triangle with hole"
         );
+    }
+
+    // Helper to create a mesh from a Transform<AnyModel> directly for testing
+    // (since we can't create JsValue in tests)
+    fn create_mesh_from_transform(transform: Transform<AnyModel>) -> WasmTriangularMesh {
+        let triangular_mesh = transform.to_triangular_mesh().unwrap();
+        triangular_mesh_to_wasm(triangular_mesh)
+    }
+
+    fn hexahedron_any_model() -> AnyModel {
+        AnyModel::PlatonicSolid(Model::new(
+            PlatonicSolid::Hexahedron,
+            Material::Uniform("default".to_string()),
+        ))
+    }
+
+    // Asserts that every triangle's geometric normal points away from the origin,
+    // i.e. the winding is outward-facing for a model centered at the origin.
+    fn assert_triangles_face_outward(geometry: &WasmTriangularGeometry) {
+        let vertices = &geometry.vertices;
+        let position = |i: u32| -> [f32; 3] {
+            [
+                vertices[(i * 3) as usize],
+                vertices[(i * 3 + 1) as usize],
+                vertices[(i * 3 + 2) as usize],
+            ]
+        };
+        for triangle in geometry.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                position(triangle[0]),
+                position(triangle[1]),
+                position(triangle[2]),
+            );
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let normal = [
+                u[1] * w[2] - u[2] * w[1],
+                u[2] * w[0] - u[0] * w[2],
+                u[0] * w[1] - u[1] * w[0],
+            ];
+            let centroid = [
+                (a[0] + b[0] + c[0]) / 3.0,
+                (a[1] + b[1] + c[1]) / 3.0,
+                (a[2] + b[2] + c[2]) / 3.0,
+            ];
+            let dot = normal[0] * centroid[0] + normal[1] * centroid[1] + normal[2] * centroid[2];
+            assert!(dot > 0.0, "triangle should face outward, dot = {dot}");
+        }
+    }
+
+    #[test]
+    fn test_create_transform_translation() {
+        let translation = DVec3::new(1.0, 2.0, 3.0);
+        let model = hexahedron_any_model();
+        let original = model.to_polygon_mesh().unwrap();
+        let transform = Transform::with_translation(translation, model);
+        let mesh = create_mesh_from_transform(transform);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_eq!(geometry.vertex_count(), 24); // 6 faces * 4 vertices
+        assert_eq!(geometry.triangle_count(), 12); // 6 faces * 2 triangles
+
+        for i in 0..geometry.vertex_count() {
+            let original_position = original.vertices[i].position;
+            assert!((geometry.vertices[i * 3] - (original_position.x + 1.0) as f32).abs() < 1e-6);
+            assert!(
+                (geometry.vertices[i * 3 + 1] - (original_position.y + 2.0) as f32).abs() < 1e-6
+            );
+            assert!(
+                (geometry.vertices[i * 3 + 2] - (original_position.z + 3.0) as f32).abs() < 1e-6
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_transform_uniform_scale() {
+        let model = hexahedron_any_model();
+        let original = model.to_polygon_mesh().unwrap();
+        let transform = Transform::with_uniform_scale(2.0, model);
+        let mesh = create_mesh_from_transform(transform);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_eq!(geometry.vertex_count(), 24);
+
+        for i in 0..geometry.vertex_count() {
+            let original_position = original.vertices[i].position;
+            assert!((geometry.vertices[i * 3] - (original_position.x * 2.0) as f32).abs() < 1e-6);
+            assert!(
+                (geometry.vertices[i * 3 + 1] - (original_position.y * 2.0) as f32).abs() < 1e-6
+            );
+            assert!(
+                (geometry.vertices[i * 3 + 2] - (original_position.z * 2.0) as f32).abs() < 1e-6
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_transform_rotation_z() {
+        let model = hexahedron_any_model();
+        let original = model.to_polygon_mesh().unwrap();
+        let transform = Transform::with_rotation_z(std::f64::consts::FRAC_PI_2, model);
+        let mesh = create_mesh_from_transform(transform);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_eq!(geometry.vertex_count(), 24);
+
+        // Rotation by 90° around Z maps (x, y, z) to (-y, x, z)
+        for i in 0..geometry.vertex_count() {
+            let p = original.vertices[i].position;
+            assert!((geometry.vertices[i * 3] - (-p.y) as f32).abs() < 1e-6);
+            assert!((geometry.vertices[i * 3 + 1] - p.x as f32).abs() < 1e-6);
+            assert!((geometry.vertices[i * 3 + 2] - p.z as f32).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_nested() {
+        let inner = Transform::with_scale_xyz(DVec3::new(2.0, 1.0, 1.0), hexahedron_any_model());
+        let outer = Transform::with_translation(
+            DVec3::new(0.0, 0.0, 5.0),
+            AnyModel::Transform(Box::new(inner)),
+        );
+        let mesh = create_mesh_from_transform(outer);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_eq!(geometry.vertex_count(), 24);
+        assert_eq!(geometry.triangle_count(), 12);
+
+        // x is scaled by 2, z is translated by 5: x in ±2/sqrt(3), z in 5 ± 1/sqrt(3)
+        let l = 1.0 / 3.0_f32.sqrt();
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_z = f32::MAX;
+        let mut max_z = f32::MIN;
+        for i in 0..geometry.vertex_count() {
+            min_x = min_x.min(geometry.vertices[i * 3]);
+            max_x = max_x.max(geometry.vertices[i * 3]);
+            min_z = min_z.min(geometry.vertices[i * 3 + 2]);
+            max_z = max_z.max(geometry.vertices[i * 3 + 2]);
+        }
+        assert!((min_x - -2.0 * l).abs() < 1e-5);
+        assert!((max_x - 2.0 * l).abs() < 1e-5);
+        assert!((min_z - (5.0 - l)).abs() < 1e-5);
+        assert!((max_z - (5.0 + l)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_create_transform_positive_scale_keeps_outward_winding() {
+        let transform = Transform::with_uniform_scale(2.0, hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_triangles_face_outward(&geometry);
+    }
+
+    #[test]
+    fn test_create_transform_negative_scale_flips_winding() {
+        // A mirroring transformation must reverse the polygon winding so that
+        // faces keep their outward orientation
+        let transform = Transform::with_uniform_scale(-1.0, hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert_triangles_face_outward(&geometry);
+    }
+
+    #[test]
+    fn test_create_transform_rejects_nan_scale() {
+        let transform = Transform::with_uniform_scale(f64::NAN, hexahedron_any_model());
+        let result = transform.to_triangular_mesh();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_transform_serde_roundtrip() {
+        let transform =
+            Transform::with_translation(DVec3::new(1.0, 2.0, 3.0), hexahedron_any_model());
+
+        let json = serde_json::to_string(&transform).unwrap();
+        let deserialized: Transform<AnyModel> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(transform, deserialized);
+    }
+
+    #[test]
+    fn test_create_transform_deserialize_json_contract() {
+        // The JSON shape documented for create_transform
+        let json = r#"{
+            "transformation": { "Translation": [1.0, 2.0, 3.0] },
+            "model": {
+                "PlatonicSolid": {
+                    "geometry": "Hexahedron",
+                    "material": { "Uniform": "default" }
+                }
+            }
+        }"#;
+        let transform: Transform<AnyModel> = serde_json::from_str(json).unwrap();
+        let mesh = create_mesh_from_transform(transform);
+
+        assert_eq!(mesh.geometry_count(), 1);
+        assert_eq!(mesh.material_ids[0], "default");
+    }
+
+    #[test]
+    fn test_create_transform_geometry_data_sizes_consistent() {
+        let transform = Transform::with_uniform_scale(2.0, hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        assert_eq!(geometry.vertices.len() % 3, 0);
+        assert_eq!(geometry.vertices.len(), geometry.normals.len());
+        assert_eq!(geometry.uvs.len(), geometry.vertices.len() / 3 * 2);
+        assert_eq!(geometry.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn test_create_transform_indices_within_bounds() {
+        let transform = Transform::with_rotation_y(0.7, hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        let vertex_count = geometry.vertex_count() as u32;
+        assert!(geometry.indices.iter().all(|&i| i < vertex_count));
+    }
+
+    #[test]
+    fn test_create_transform_normals_normalized() {
+        let transform =
+            Transform::with_scale_xyz(DVec3::new(2.0, 3.0, 4.0), hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+        let geometry = mesh.get_geometry(0).unwrap();
+
+        for i in 0..geometry.vertex_count() {
+            let nx = geometry.normals[i * 3];
+            let ny = geometry.normals[i * 3 + 1];
+            let nz = geometry.normals[i * 3 + 2];
+            let length = (nx * nx + ny * ny + nz * nz).sqrt();
+            assert!(
+                (length - 1.0).abs() < 1e-5,
+                "normal {i} should be normalized, length = {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_create_transform_get_geometry_by_material() {
+        let transform =
+            Transform::with_translation(DVec3::new(1.0, 0.0, 0.0), hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+
+        let geometry = mesh.get_geometry_by_material("default").unwrap();
+        assert_eq!(geometry.vertex_count(), 24);
+        assert!(mesh.get_geometry_by_material("nonexistent").is_none());
     }
 }
