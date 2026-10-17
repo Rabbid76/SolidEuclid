@@ -90,7 +90,7 @@ Run with `npm test` (builds wasm first) or `npm run test:watch`.
 
 Each test file (`examples/cpp/tests/test-*.cpp`) exercises the C bridge:
 
-1. Build a JSON string with `CString::new(r#"{...}"#)`.
+1. Build a JSON string with a C++ raw string literal: `constexpr auto json = R"({...})";`.
 2. Call the `create_*_c` function.
 3. Assert `mesh.error == nullptr`, check `entries_len`, material ids, vertex/triangle counts.
 4. Call `triangular_mesh_free(mesh)`.
@@ -148,15 +148,15 @@ Linux: pthread/dl/m; Windows: ws2_32/userenv/bcrypt/ntdll).
 
 ## Linting and formatting
 
-| Language              | Tool                     | Commands                                                                                      |
-| --------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
-| Rust                  | rustfmt                  | `cargo fmt`, `cargo fmt --check`                                                              |
-| Rust                  | clippy (via `cargo fix`) | `cargo fix --allow-dirty` (part of `tidy-up`)                                                 |
-| TypeScript            | ESLint                   | `npm run lint`, `npm run lint:fix` (config: `eslint.config.js`)                               |
-| TypeScript / Markdown | Prettier                 | `npm run format`, `npm run format:check` (config: `.prettierrc`, excludes: `.prettierignore`) |
-| C++                   | clang-format             | `npm run format:cpp` (config: `.clang-format`)                                                |
-| C++                   | clang-tidy               | `.clang-tidy` config (run manually or via IDE)                                                |
-| Markdown              | link checker             | `node .agents/scripts/check-markdown-links.js <file.md> …`                                    |
+| Language              | Tool                 | Commands                                                                                      |
+| --------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
+| Rust                  | rustfmt              | `cargo fmt`, `cargo fmt --check`                                                              |
+| Rust                  | compiler suggestions | `cargo fix --allow-dirty` (part of `tidy-up`)                                                 |
+| TypeScript            | ESLint               | `npm run lint`, `npm run lint:fix` (config: `eslint.config.js`)                               |
+| TypeScript / Markdown | Prettier             | `npm run format`, `npm run format:check` (config: `.prettierrc`, excludes: `.prettierignore`) |
+| C++                   | clang-format         | `npm run format:cpp` (config: `.clang-format`)                                                |
+| C++                   | clang-tidy           | `.clang-tidy` config (run manually or via IDE)                                                |
+| Markdown              | link checker         | `node .agents/scripts/check-markdown-links.js <file.md> …`                                    |
 
 `npm run tidy-up` runs the full pass: prettier, eslint --fix, cargo fix, cargo fmt,
 clang-format. Run it before committing a larger change.
@@ -183,7 +183,10 @@ clang-format. Run it before committing a larger change.
 
 ### Debugging the C bridge
 
-- Build in debug mode: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`.
+- Build the C++ side in debug mode: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`.
+  Note: `CMAKE_BUILD_TYPE` only affects the C++ compilation; the Rust staticlib is always built
+  with `cargo build --release` (hard-coded in `CMakeLists.txt`). Debugging an unoptimized Rust
+  bridge requires changing both the Cargo build command and the linked library path.
 - The doctest suite prints failures with file:line; run a single test case with
   `./build/examples/cpp/solid_euclid_tests -tc=<name>`.
 - Memory errors: the C bridge uses raw pointers across the ABI; a missing `triangular_mesh_free`

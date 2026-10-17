@@ -49,12 +49,12 @@ All geometry logic lives in `solid_euclid/src/`. Every module is `pub mod`-decla
 
 ### Supporting geometry modules
 
-| Module                         | File                                     | Role                                                                                                                                        |
-| ------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SweepModel`                   | `solid_euclid/src/sweep_model.rs`        | Generic sweep: a profile swept along a path, both sampled via `SampleContour`                                                               |
-| `PlanarProfile`                | `solid_euclid/src/planar_profile.rs`     | 2D profile defined by path commands (`Move`, `Line`, `Ellipse`, `Nurbs`) with corner treatments (`Edge`, `SmoothEdge`, `Chamfer`, `Fillet`) |
-| `PlanarContour` / `ContourSet` | `solid_euclid/src/planar_contour.rs`     | Sampled contour representation (points with tangents, segments); earcut triangulation for concave polygons with holes                       |
-| `PlanarNurbsCurve`             | `solid_euclid/src/planar_nurbs_curve.rs` | NURBS curve evaluation and sampling                                                                                                         |
+| Module                                          | File                                     | Role                                                                                                                                         |
+| ----------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SweepModel`                                    | `solid_euclid/src/sweep_model.rs`        | Generic sweep: a profile swept along a path, both sampled via `SampleContour`                                                                |
+| `PlanarProfile`                                 | `solid_euclid/src/planar_profile.rs`     | 2D profile defined by path commands (`Move`, `Line`, `Ellipse`, `Bezier`) with corner treatments (`Edge`, `SmoothEdge`, `Chamfer`, `Fillet`) |
+| `Contour` / `ContourSet`                        | `solid_euclid/src/planar_contour.rs`     | Sampled contour representation (`Point`, `Segment`, `Contour`, `ContourSet`); earcut triangulation for concave polygons with holes           |
+| `Nurbs` / `NurbsSegment` / `Curve` / `CurveSet` | `solid_euclid/src/planar_nurbs_curve.rs` | NURBS curve evaluation and sampling                                                                                                          |
 
 ### Bridge modules
 
