@@ -68,11 +68,14 @@ GeometryModel ──to_polygon_mesh()──> PolygonMesh ──TriangularMesh::f
   `GeometryHash` (SHA256, values rounded to 3 decimals) for `PolygonMesh`, `TriangularMesh`, and —
   by delegating to their polygon mesh — for `Transform<T>` and `AnyModel`.
 - **Transformations** — [`transform.rs`](../../solid_euclid/src/transform.rs) wraps any model in a
-  `Transform<T>`: positions are transformed with the matrix (w=1), normals with the inverse
-  transpose (then normalized), UVs stay in texture space. A negative determinant (mirroring)
-  reverses the polygon indices so faces keep their outward winding. `Transformation::validate()`
-  rejects NaN/Inf parameters with `GeometryError::InvalidParameter`; zero and negative scales are
-  allowed. [`model.rs`](../../solid_euclid/src/model.rs) defines `AnyModel`, the serde enum the
+  `Transform<T>`: positions are transformed with the matrix (w=1), normals with the cofactor
+  (adjugate) transpose of the linear part (then normalized), UVs stay in texture space. A
+  negative determinant (mirroring) reverses the polygon indices so faces keep their outward
+  winding. `Transformation::validate()` rejects NaN/Inf parameters, non-affine matrices (last row
+  must be `[0, 0, 0, 1]`) and non-unit quaternions with `GeometryError::InvalidParameter`; zero
+  and negative scales are allowed. Singular transforms never invert the matrix, so normals stay
+  finite: surviving faces keep their correct normal, collapsed faces keep their original normal.
+  [`model.rs`](../../solid_euclid/src/model.rs) defines `AnyModel`, the serde enum the
   bridges deserialize `Transform<AnyModel>` from (externally tagged, like `Material::Uniform`);
   the `Transform` variant nests transformations.
 

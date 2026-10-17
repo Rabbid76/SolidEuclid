@@ -47,7 +47,8 @@ is one of `Matrix` (flat column-major array of 16), `Quaternion` (`[x, y, z, w]`
 (`[x, y, z]`), `UniformScale` (number), `ScaleXYZ` (`[x, y, z]`), `RotationX`/`RotationY`/
 `RotationZ` (radians), and `model` is any `AnyModel` variant — including `Transform`, so
 transformations nest. A mirroring transformation (negative scale determinant) flips the polygon
-winding; NaN or infinite parameters throw.
+winding; NaN or infinite parameters, non-affine matrices (last row must be `[0, 0, 0, 1]`) and
+non-unit quaternions throw.
 
 `create_planar_profile` is the exception: it parses a `PlanarProfile` and returns it reserialized as
 `JsValue` for use with `create_extrude`
