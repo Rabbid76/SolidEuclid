@@ -24,7 +24,8 @@ pub trait GeometryModel {
   a cheaper triangulation than the generic polygon path.
 - Implementors today: `platonic_solid::Model`, `sphere::Model`, `sweeps::{Torus, Capsule,
 Cylinder, ConicalFrustum, Extrude}`, `planar_profile::PlanarProfile`,
-  `planar_contour::ContourSet`.
+  `planar_contour::ContourSet`, plus the wrappers `transform::Transform<T>` and `model::AnyModel`
+  (match-and-delegate over every geometry type, with a `Transform` variant for nesting).
 
 ## The mesh pipeline
 
@@ -64,7 +65,19 @@ GeometryModel ──to_polygon_mesh()──> PolygonMesh ──TriangularMesh::f
   `NotYetImplemented`, `InvalidParameter`). Propagate it through `Result`; never panic on
   caller-controlled input.
 - **Hashing** — [`geometry_hash.rs`](../../solid_euclid/src/geometry_hash.rs) implements
-  `GeometryHash` (SHA256, values rounded to 3 decimals) for meshes and vertices.
+  `GeometryHash` (SHA256, values rounded to 3 decimals) for `PolygonMesh`, `TriangularMesh`, and —
+  by delegating to their polygon mesh — for `Transform<T>` and `AnyModel`.
+- **Transformations** — [`transform.rs`](../../solid_euclid/src/transform.rs) wraps any model in a
+  `Transform<T>`: positions are transformed with the matrix (w=1), normals with the cofactor
+  (adjugate) transpose of the linear part (then normalized), UVs stay in texture space. A
+  negative determinant (mirroring) reverses the polygon indices so faces keep their outward
+  winding. `Transformation::validate()` rejects NaN/Inf parameters, non-affine matrices (last row
+  must be `[0, 0, 0, 1]`) and non-unit quaternions with `GeometryError::InvalidParameter`; zero
+  and negative scales are allowed. Singular transforms never invert the matrix, so normals stay
+  finite: surviving faces keep their correct normal, collapsed faces keep their original normal.
+  [`model.rs`](../../solid_euclid/src/model.rs) defines `AnyModel`, the serde enum the
+  bridges deserialize `Transform<AnyModel>` from (externally tagged, like `Material::Uniform`);
+  the `Transform` variant nests transformations.
 
 ## Adding a geometry type
 
@@ -80,20 +93,22 @@ GeometryModel ──to_polygon_mesh()──> PolygonMesh ──TriangularMesh::f
 
 ## File map
 
-| File                                     | Role                                                        |
-| ---------------------------------------- | ----------------------------------------------------------- |
-| `solid_euclid/src/geometry_model.rs`     | The `GeometryModel` trait                                   |
-| `solid_euclid/src/polygon_mesh.rs`       | `PolygonMesh`, `Polygon`                                    |
-| `solid_euclid/src/triangular_mesh.rs`    | `TriangularMesh`, `TriangularGeometry`                      |
-| `solid_euclid/src/vertex.rs`             | `Vertex` (position, normal, uv)                             |
-| `solid_euclid/src/material.rs`           | `Material` assignment strategies                            |
-| `solid_euclid/src/geometry_error.rs`     | `GeometryError`                                             |
-| `solid_euclid/src/geometry_hash.rs`      | `GeometryHash` (SHA256)                                     |
-| `solid_euclid/src/plane.rs`              | `Plane`                                                     |
-| `solid_euclid/src/planar_contour.rs`     | `PlanarContour`, `ContourSet` (earcut path)                 |
-| `solid_euclid/src/planar_nurbs_curve.rs` | `PlanarNurbsCurve`                                          |
-| `solid_euclid/src/planar_profile.rs`     | `PlanarProfile` (extrude outlines)                          |
-| `solid_euclid/src/platonic_solid.rs`     | Platonic solids (`Model`)                                   |
-| `solid_euclid/src/sphere.rs`             | Sphere (`Model`)                                            |
-| `solid_euclid/src/sweep_model.rs`        | `SweepModel` (profile swept along a path)                   |
-| `solid_euclid/src/sweeps.rs`             | `Torus`, `Capsule`, `Cylinder`, `ConicalFrustum`, `Extrude` |
+| File                                     | Role                                                                  |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `solid_euclid/src/geometry_model.rs`     | The `GeometryModel` trait                                             |
+| `solid_euclid/src/polygon_mesh.rs`       | `PolygonMesh`, `Polygon`                                              |
+| `solid_euclid/src/triangular_mesh.rs`    | `TriangularMesh`, `TriangularGeometry`                                |
+| `solid_euclid/src/vertex.rs`             | `Vertex` (position, normal, uv)                                       |
+| `solid_euclid/src/material.rs`           | `Material` assignment strategies                                      |
+| `solid_euclid/src/geometry_error.rs`     | `GeometryError`                                                       |
+| `solid_euclid/src/geometry_hash.rs`      | `GeometryHash` (SHA256)                                               |
+| `solid_euclid/src/model.rs`              | `AnyModel` (serde enum of all geometry types + Transform)             |
+| `solid_euclid/src/transform.rs`          | `Transform<T>`, `Transformation` (matrix/quat/translate/scale/rotate) |
+| `solid_euclid/src/plane.rs`              | `Plane`                                                               |
+| `solid_euclid/src/planar_contour.rs`     | `PlanarContour`, `ContourSet` (earcut path)                           |
+| `solid_euclid/src/planar_nurbs_curve.rs` | `PlanarNurbsCurve`                                                    |
+| `solid_euclid/src/planar_profile.rs`     | `PlanarProfile` (extrude outlines)                                    |
+| `solid_euclid/src/platonic_solid.rs`     | Platonic solids (`Model`)                                             |
+| `solid_euclid/src/sphere.rs`             | Sphere (`Model`)                                                      |
+| `solid_euclid/src/sweep_model.rs`        | `SweepModel` (profile swept along a path)                             |
+| `solid_euclid/src/sweeps.rs`             | `Torus`, `Capsule`, `Cylinder`, `ConicalFrustum`, `Extrude`           |

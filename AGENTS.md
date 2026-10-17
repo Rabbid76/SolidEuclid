@@ -88,9 +88,9 @@ for C++ via a C bridge and for TypeScript/JavaScript through WebAssembly.
 
 1. **Rust core** (`solid_euclid/`) — the only place geometry logic lives. Primitives (platonic
    solids, sphere), sweep bodies (torus, capsule, cylinder, conical frustum), extrusions from
-   planar profiles and NURBS contours, and the mesh pipeline: `PolygonMesh` (f64, polygons) →
-   `TriangularMesh` (f32, per-material triangle soups). Every geometry type implements the
-   `GeometryModel` trait.
+   planar profiles and NURBS contours, model transformations (`Transform<T>` over the `AnyModel`
+   enum), and the mesh pipeline: `PolygonMesh` (f64, polygons) → `TriangularMesh` (f32,
+   per-material triangle soups). Every geometry type implements the `GeometryModel` trait.
 2. **C bridge** (`solid_euclid/src/c_api.rs` + `include/solid_euclid.h`) — `extern "C"` functions
    that take a model as a JSON string and return a `CTriangularMesh` by value; the caller frees
    every allocation with the matching `*_free` function.
@@ -120,6 +120,7 @@ how data flows through the mesh pipeline and bridges) see
 │       ├── material.rs           # Material assignment: Default, Uniform, Map, Array
 │       ├── geometry_error.rs     # GeometryError: the crate's error type
 │       ├── geometry_hash.rs      # GeometryHash: SHA256 over geometry (rounded to 3 decimals)
+│       ├── model.rs              # AnyModel: serde enum of all geometry types + Transform variant
 │       ├── plane.rs              # Plane
 │       ├── planar_contour.rs     # PlanarContour, ContourSet (earcut triangulation path)
 │       ├── planar_nurbs_curve.rs # PlanarNurbsCurve
@@ -128,6 +129,7 @@ how data flows through the mesh pipeline and bridges) see
 │       ├── sphere.rs             # Sphere (Model)
 │       ├── sweep_model.rs        # SweepModel: a profile swept along a path
 │       ├── sweeps.rs             # Torus, Capsule, Cylinder, ConicalFrustum, Extrude
+│       ├── transform.rs          # Transform<T> + Transformation: translate/rotate/scale/mirror a model
 │       ├── web_api.rs            # WASM bindings (wasm-bindgen) -> pkg/
 │       └── c_api.rs              # C bridge (extern "C") -> include/solid_euclid.h
 ├── include/
@@ -223,9 +225,10 @@ Skills provide deep domain knowledge. Load them by reading the file when the tas
 
 ### The Pattern Every Geometry Type Follows
 
-Platonic solid → sphere → torus → capsule → cylinder → conical frustum → extrude: a model struct in
-the core with `impl GeometryModel`, a `create_*` function in `web_api.rs`, a `create_*_c` function
-in `c_api.rs` with a header declaration, a vitest file, a doctest file, and an example page.
+Platonic solid → sphere → torus → capsule → cylinder → conical frustum → extrude → transform: a
+model struct in the core with `impl GeometryModel`, a `create_*` function in `web_api.rs`, a
+`create_*_c` function in `c_api.rs` with a header declaration, a vitest file, a doctest file, and
+an example page.
 
 ## Hard Rules
 
@@ -361,7 +364,7 @@ npm run test:cpp            # build the doctest target and run it
 
 ## Adding New Geometry
 
-The pattern every primitive follows (platonic solid → sphere → torus → capsule → cylinder → conical frustum → extrude):
+The pattern every primitive follows (platonic solid → sphere → torus → capsule → cylinder → conical frustum → extrude → transform):
 
 1. **Rust core** — a new `snake_case` module in `solid_euclid/src/` (registered in `lib.rs`), a serde-serializable model struct, `impl GeometryModel` building the `PolygonMesh` in `to_polygon_mesh()`, and unit tests beside the module — see [`.agents/skills/solid-euclid-geometry-model.md`](./.agents/skills/solid-euclid-geometry-model.md)
 2. **Web API** — `create_<name>(JsValue) -> Result<WasmTriangularMesh, JsError>` in `web_api.rs`, a vitest file in `examples/web/__tests__/`, and an example page in `examples/web/<name>/` registered in `vite.config.ts` — see [`.agents/skills/solid-euclid-web-api.md`](./.agents/skills/solid-euclid-web-api.md)

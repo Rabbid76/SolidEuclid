@@ -34,8 +34,9 @@ Once the work is on `main`, the durable outcome is promoted and the document del
 
 ## Current Documents
 
-| Document | Status | Description |
-| -------- | ------ | ----------- |
+| Document                                            | Status      | Description                                                                                                  |
+| --------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
+| [Model transformations](./model-transformations.md) | Implemented | How to make `Transform<T>` deserializable from JSON at the bridge boundary; evaluates five design approaches |
 
 Add feature analysis documents as needed following the naming convention:
 `kebab-case-description.md` (e.g., `csg-operations.md`).

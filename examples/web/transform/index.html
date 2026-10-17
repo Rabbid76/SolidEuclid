@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transform - SolidEuclid</title>
+    <link rel="icon" type="image/x-icon" href="../favicon.ico?v=2" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+      }
+      canvas {
+        display: block;
+      }
+      #menu {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 12px 16px;
+        border-radius: 8px;
+        color: white;
+        font-family: sans-serif;
+        font-size: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+      }
+      #menu label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+      }
+      #menu select,
+      #menu input {
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: none;
+        background: #333;
+        color: white;
+        cursor: pointer;
+      }
+      #menu input[type='number'] {
+        width: 70px;
+      }
+      #menu input[type='range'] {
+        width: 100px;
+      }
+      #menu input[type='checkbox'] {
+        width: auto;
+      }
+      .options-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #555;
+      }
+      .section-title {
+        font-weight: bold;
+        margin-bottom: 4px;
+        color: #aaa;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="menu">
+      <div class="options-section">
+        <span class="section-title">Base Geometry</span>
+        <label>
+          Geometry:
+          <select id="baseGeometry">
+            <option value="Hexahedron" selected>Hexahedron</option>
+            <option value="Tetrahedron">Tetrahedron</option>
+            <option value="Torus">Torus</option>
+            <option value="Cylinder">Cylinder</option>
+          </select>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Translation</span>
+        <label>
+          X:
+          <input type="range" id="translateX" value="0" min="-3" max="3" step="0.1" />
+          <span id="translateXValue">0.0</span>
+        </label>
+        <label>
+          Y:
+          <input type="range" id="translateY" value="0" min="-3" max="3" step="0.1" />
+          <span id="translateYValue">0.0</span>
+        </label>
+        <label>
+          Z:
+          <input type="range" id="translateZ" value="0" min="-3" max="3" step="0.1" />
+          <span id="translateZValue">0.0</span>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Rotation (degrees)</span>
+        <label>
+          X:
+          <input type="range" id="rotateX" value="0" min="0" max="360" step="1" />
+          <span id="rotateXValue">0</span>
+        </label>
+        <label>
+          Y:
+          <input type="range" id="rotateY" value="0" min="0" max="360" step="1" />
+          <span id="rotateYValue">0</span>
+        </label>
+        <label>
+          Z:
+          <input type="range" id="rotateZ" value="0" min="0" max="360" step="1" />
+          <span id="rotateZValue">0</span>
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">Scale</span>
+        <label>
+          X:
+          <input type="range" id="scaleX" value="1" min="0.1" max="3" step="0.1" />
+          <span id="scaleXValue">1.0</span>
+        </label>
+        <label>
+          Y:
+          <input type="range" id="scaleY" value="1" min="0.1" max="3" step="0.1" />
+          <span id="scaleYValue">1.0</span>
+        </label>
+        <label>
+          Z:
+          <input type="range" id="scaleZ" value="1" min="0.1" max="3" step="0.1" />
+          <span id="scaleZValue">1.0</span>
+        </label>
+        <label>
+          <input type="checkbox" id="mirrorX" />
+          Mirror X (negative scale flips winding)
+        </label>
+      </div>
+      <div class="options-section">
+        <span class="section-title">View</span>
+        <label>
+          View Mode:
+          <select id="viewMode">
+            <option value="geometry" selected>Geometry</option>
+            <option value="wireframe">Wireframe</option>
+            <option value="solid">Solid</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

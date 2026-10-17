@@ -2,9 +2,11 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
 use crate::geometry_model::GeometryModel;
+use crate::model::AnyModel;
 use crate::platonic_solid::Model as PlatonicSolidModel;
 use crate::sphere::Model as SphereModel;
 use crate::sweeps::{Capsule, ConicalFrustum, Cylinder, Extrude, Torus};
+use crate::transform::Transform;
 use crate::triangular_mesh::TriangularMesh;
 
 /// Returns a C-compatible string with the hello message.
@@ -684,6 +686,88 @@ pub unsafe extern "C" fn create_extrude_c(extrude_json: *const c_char) -> CTrian
         };
 
         match extrude.to_triangular_mesh() {
+            Ok(mesh) => triangular_mesh_to_c(mesh),
+            Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
+        }
+    }
+}
+
+// =============================================================================
+// Transform C API
+// =============================================================================
+
+/// Creates a triangular mesh for a transformed model from a JSON string.
+///
+/// A transform applies a transformation (matrix, quaternion, translation, scale,
+/// or axis rotation) to any geometry model. The model is given as an `AnyModel`,
+/// which covers every geometry type in the kernel. Transformations can be nested
+/// by wrapping an already transformed model in another transformation.
+///
+/// A mirroring transformation (negative scale determinant) reverses the polygon
+/// winding so faces keep their outward orientation. NaN or infinite transformation
+/// parameters are rejected with an error.
+///
+/// # Arguments
+/// * `model_json` - A null-terminated JSON string representing the transform.
+///
+/// # Example JSON (hexahedron translated by (1, 2, 3))
+/// ```json
+/// {
+///   "transformation": { "Translation": [1.0, 2.0, 3.0] },
+///   "model": {
+///     "PlatonicSolid": {
+///       "geometry": "Hexahedron",
+///       "material": { "Uniform": "default" }
+///     }
+///   }
+/// }
+/// ```
+///
+/// # Example JSON (nested transformations: scale a torus, then translate it)
+/// ```json
+/// {
+///   "transformation": { "Translation": [0.0, 0.0, 5.0] },
+///   "model": {
+///     "Transform": {
+///       "transformation": { "ScaleXYZ": [1.0, 2.0, 1.0] },
+///       "model": {
+///         "Torus": {
+///           "major_radius": 2.0,
+///           "minor_radius": 0.5,
+///           "major_segments": 32,
+///           "minor_segments": 16,
+///           "material": { "Uniform": "metal" }
+///         }
+///       }
+///     }
+///   }
+/// }
+/// ```
+///
+/// # Returns
+/// A `CTriangularMesh` containing the mesh data organized by material.
+/// Check the `error` field for any errors.
+///
+/// # Safety
+/// The caller must free the returned mesh using `triangular_mesh_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_transform_c(model_json: *const c_char) -> CTriangularMesh {
+    unsafe {
+        if model_json.is_null() {
+            return create_error_mesh("Null JSON string provided");
+        }
+
+        let json_str = match CStr::from_ptr(model_json).to_str() {
+            Ok(s) => s,
+            Err(e) => return create_error_mesh(&format!("Invalid UTF-8 in JSON string: {}", e)),
+        };
+
+        let transform: Transform<AnyModel> = match serde_json::from_str(json_str) {
+            Ok(t) => t,
+            Err(e) => return create_error_mesh(&format!("Failed to parse JSON: {}", e)),
+        };
+
+        match transform.to_triangular_mesh() {
             Ok(mesh) => triangular_mesh_to_c(mesh),
             Err(e) => create_error_mesh(&format!("Failed to create mesh: {:?}", e)),
         }
@@ -2145,6 +2229,362 @@ mod tests {
                 assert!(geom.vertices_len > 0);
                 triangular_mesh_free(mesh);
             }
+        }
+    }
+
+    // =============================================================================
+    // Transform C API Tests
+    // =============================================================================
+
+    // Helper function to create a transform JSON wrapping a hexahedron
+    fn hexahedron_transform_json(transformation: &str) -> String {
+        format!(
+            r#"{{"transformation":{},"model":{{"PlatonicSolid":{{"geometry":"Hexahedron","material":{{"Uniform":"default"}}}}}}}}"#,
+            transformation
+        )
+    }
+
+    // Asserts that every triangle's geometric normal points away from the origin,
+    // i.e. the winding is outward-facing for a model centered at the origin.
+    fn assert_triangles_face_outward(vertices: &[f32], indices: &[u32]) {
+        let position = |i: u32| -> [f32; 3] {
+            [
+                vertices[(i * 3) as usize],
+                vertices[(i * 3 + 1) as usize],
+                vertices[(i * 3 + 2) as usize],
+            ]
+        };
+        for triangle in indices.chunks_exact(3) {
+            let (a, b, c) = (
+                position(triangle[0]),
+                position(triangle[1]),
+                position(triangle[2]),
+            );
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let normal = [
+                u[1] * w[2] - u[2] * w[1],
+                u[2] * w[0] - u[0] * w[2],
+                u[0] * w[1] - u[1] * w[0],
+            ];
+            let centroid = [
+                (a[0] + b[0] + c[0]) / 3.0,
+                (a[1] + b[1] + c[1]) / 3.0,
+                (a[2] + b[2] + c[2]) / 3.0,
+            ];
+            let dot = normal[0] * centroid[0] + normal[1] * centroid[1] + normal[2] * centroid[2];
+            assert!(dot > 0.0, "triangle should face outward, dot = {}", dot);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_translation() {
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Translation":[1.0,2.0,3.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        assert!(!mesh.entries.is_null());
+
+        unsafe {
+            let entry = &*mesh.entries;
+            let material_id = CStr::from_ptr(entry.material_id).to_str().unwrap();
+            assert_eq!(material_id, "default");
+
+            let geom = &entry.geometry;
+            assert_eq!(geom.vertices_len, 24 * 3); // 6 faces * 4 vertices
+            assert_eq!(geom.normals_len, geom.vertices_len);
+            assert_eq!(geom.uvs_len, geom.vertices_len / 3 * 2);
+            assert_eq!(geom.indices_len, 12 * 3); // 6 faces * 2 triangles
+
+            // The hexahedron spans ±1/sqrt(3); translated by (1, 2, 3) the bounds shift
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+            let l = 1.0 / 3.0_f32.sqrt();
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for v in vertices.chunks_exact(3) {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(v[axis]);
+                    max[axis] = max[axis].max(v[axis]);
+                }
+            }
+            let expected_min = [1.0 - l, 2.0 - l, 3.0 - l];
+            let expected_max = [1.0 + l, 2.0 + l, 3.0 + l];
+            for axis in 0..3 {
+                assert!((min[axis] - expected_min[axis]).abs() < 1e-5);
+                assert!((max[axis] - expected_max[axis]).abs() < 1e-5);
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_uniform_scale() {
+        let json = CString::new(hexahedron_transform_json(r#"{"UniformScale":2.0}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+            let l = 2.0 / 3.0_f32.sqrt();
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for v in vertices.chunks_exact(3) {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(v[axis]);
+                    max[axis] = max[axis].max(v[axis]);
+                }
+            }
+            for axis in 0..3 {
+                assert!((min[axis] - -l).abs() < 1e-5);
+                assert!((max[axis] - l).abs() < 1e-5);
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_rotation_z() {
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"RotationZ":1.5707963267948966}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+
+            // First vertex of the hexahedron is (-l, -l, l); rotated 90° around Z
+            // it becomes (l, -l, l)
+            let l = 1.0 / 3.0_f32.sqrt();
+            assert!((vertices[0] - l).abs() < 1e-6);
+            assert!((vertices[1] - -l).abs() < 1e-6);
+            assert!((vertices[2] - l).abs() < 1e-6);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_quaternion() {
+        // 90° rotation around Z as a quaternion (x, y, z, w)
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Quaternion":[0.0,0.0,0.7071067811865476,0.7071067811865476]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+
+            let l = 1.0 / 3.0_f32.sqrt();
+            assert!((vertices[0] - l).abs() < 1e-6);
+            assert!((vertices[1] - -l).abs() < 1e-6);
+            assert!((vertices[2] - l).abs() < 1e-6);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_matrix() {
+        // Uniform scale by 2 as a flat column-major 4x4 matrix
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Matrix":[2.0,0.0,0.0,0.0,0.0,2.0,0.0,0.0,0.0,0.0,2.0,0.0,0.0,0.0,0.0,1.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+
+            let l = 2.0 / 3.0_f32.sqrt();
+            assert!((vertices[0] - -l).abs() < 1e-6);
+            assert!((vertices[1] - -l).abs() < 1e-6);
+            assert!((vertices[2] - l).abs() < 1e-6);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_nested() {
+        let json = CString::new(
+            r#"{"transformation":{"Translation":[0.0,0.0,5.0]},"model":{"Transform":{"transformation":{"ScaleXYZ":[2.0,1.0,1.0]},"model":{"PlatonicSolid":{"geometry":"Hexahedron","material":{"Uniform":"default"}}}}}}"#,
+        )
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        assert_eq!(mesh.entries_len, 1);
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            assert_eq!(geom.vertices_len, 24 * 3);
+            assert_eq!(geom.indices_len, 12 * 3);
+
+            // x is scaled by 2, z is translated by 5
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+            let l = 1.0 / 3.0_f32.sqrt();
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut min_z = f32::MAX;
+            let mut max_z = f32::MIN;
+            for v in vertices.chunks_exact(3) {
+                min_x = min_x.min(v[0]);
+                max_x = max_x.max(v[0]);
+                min_z = min_z.min(v[2]);
+                max_z = max_z.max(v[2]);
+            }
+            assert!((min_x - -2.0 * l).abs() < 1e-5);
+            assert!((max_x - 2.0 * l).abs() < 1e-5);
+            assert!((min_z - (5.0 - l)).abs() < 1e-5);
+            assert!((max_z - (5.0 + l)).abs() < 1e-5);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_negative_scale_keeps_outward_winding() {
+        // A mirroring transformation must reverse the polygon winding so that
+        // faces keep their outward orientation
+        let json = CString::new(hexahedron_transform_json(r#"{"UniformScale":-1.0}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let vertices = std::slice::from_raw_parts(geom.vertices, geom.vertices_len);
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            assert_triangles_face_outward(vertices, indices);
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_indices_within_bounds() {
+        let json = CString::new(hexahedron_transform_json(r#"{"RotationY":0.7}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            let indices = std::slice::from_raw_parts(geom.indices, geom.indices_len);
+            let vertex_count = (geom.vertices_len / 3) as u32;
+
+            for &index in indices {
+                assert!(
+                    index < vertex_count,
+                    "Index {} out of bounds (vertex count: {})",
+                    index,
+                    vertex_count
+                );
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_null_json() {
+        let mesh = unsafe { create_transform_c(std::ptr::null()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Null"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_invalid_json() {
+        let json = CString::new(r#"{"invalid": json}"#).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_unknown_transformation_variant() {
+        let json = CString::new(hexahedron_transform_json(r#"{"Bogus":1.0}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("Failed to parse"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_non_affine_matrix() {
+        // Finite, but the last row is [0, 0, 0, -1]
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Matrix":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,-1.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("affine"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_non_unit_quaternion() {
+        // Finite, but length sqrt(2) instead of a pure rotation
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Quaternion":[0.0,0.0,1.0,1.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("unit length"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_zero_scale_finite_normals() {
+        let json = CString::new(hexahedron_transform_json(r#"{"UniformScale":0.0}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            assert!(geom.normals_len > 0);
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+            for component in normals {
+                assert!(component.is_finite());
+            }
+
+            triangular_mesh_free(mesh);
         }
     }
 }

@@ -31,6 +31,7 @@ Date: YYYY-MM-DD
 
 ## Current Documents
 
-| ADR                                                                                                                   | Status   |
-| --------------------------------------------------------------------------------------------------------------------- | -------- |
-| [0001 — GeometryModel is the single mesh-conversion contract](0001-geometry-model-as-the-mesh-conversion-contract.md) | Accepted |
+| ADR                                                                                                                        | Status   |
+| -------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [0001 — GeometryModel is the single mesh-conversion contract](0001-geometry-model-as-the-mesh-conversion-contract.md)      | Accepted |
+| [0002 — Model transformations: AnyModel enum, bridge exposure, and design decisions](0002-model-transformations-design.md) | Accepted |
