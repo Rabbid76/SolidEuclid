@@ -21,6 +21,7 @@ export default defineConfig({
         sphere: resolve(__dirname, 'examples/web/sphere/index.html'),
         sweeps: resolve(__dirname, 'examples/web/sweeps/index.html'),
         extrude: resolve(__dirname, 'examples/web/extrude/index.html'),
+        transform: resolve(__dirname, 'examples/web/transform/index.html'),
       },
     },
   },
