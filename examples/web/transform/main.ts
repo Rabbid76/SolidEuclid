@@ -5,6 +5,7 @@ import {
   Color,
   DirectionalLight,
   Group,
+  LineSegments,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
@@ -274,6 +275,23 @@ async function main() {
     // Dispose old geometry
     for (const geometry of currentGeometries) {
       geometry.dispose();
+    }
+
+    // Dispose the wireframe children's geometries and materials; each update
+    // creates new ones, while the solid material is shared and retained
+    if (wireframeGroup) {
+      for (const child of wireframeGroup.children) {
+        const lines = child as LineSegments;
+        lines.geometry.dispose();
+        const material = lines.material;
+        if (Array.isArray(material)) {
+          for (const m of material) {
+            m.dispose();
+          }
+        } else {
+          material.dispose();
+        }
+      }
     }
 
     // Create new objects
