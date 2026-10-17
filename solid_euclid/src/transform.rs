@@ -77,6 +77,54 @@ impl Transformation {
         let result = normal_matrix * norm4;
         DVec3::new(result.x, result.y, result.z).normalize()
     }
+
+    /// Validates that all numeric parameters of the transformation are finite.
+    ///
+    /// NaN or infinite values would produce degenerate geometry, so they are
+    /// rejected with [`GeometryError::InvalidParameter`].
+    pub fn validate(&self) -> Result<(), GeometryError> {
+        fn check(parameter: &str, value: f64) -> Result<(), GeometryError> {
+            if value.is_finite() {
+                Ok(())
+            } else {
+                Err(GeometryError::InvalidParameter {
+                    parameter: parameter.to_string(),
+                    message: format!("value must be finite, got {value}"),
+                })
+            }
+        }
+
+        match self {
+            Transformation::Matrix(mat) => {
+                for (col_index, col) in mat.to_cols_array_2d().iter().enumerate() {
+                    for (row_index, value) in col.iter().enumerate() {
+                        check(&format!("matrix[{row_index}][{col_index}]"), *value)?;
+                    }
+                }
+                Ok(())
+            }
+            Transformation::Quaternion(quat) => {
+                check("quaternion.x", quat.x)?;
+                check("quaternion.y", quat.y)?;
+                check("quaternion.z", quat.z)?;
+                check("quaternion.w", quat.w)
+            }
+            Transformation::Translation(vec) => {
+                check("translation.x", vec.x)?;
+                check("translation.y", vec.y)?;
+                check("translation.z", vec.z)
+            }
+            Transformation::UniformScale(scale) => check("scale", *scale),
+            Transformation::ScaleXYZ(scale) => {
+                check("scale.x", scale.x)?;
+                check("scale.y", scale.y)?;
+                check("scale.z", scale.z)
+            }
+            Transformation::RotationX(angle) => check("angle", *angle),
+            Transformation::RotationY(angle) => check("angle", *angle),
+            Transformation::RotationZ(angle) => check("angle", *angle),
+        }
+    }
 }
 
 impl Default for Transformation {
@@ -162,8 +210,13 @@ where
     T: GeometryModel,
 {
     fn to_polygon_mesh(&self) -> Result<PolygonMesh, GeometryError> {
+        self.transformation.validate()?;
+
         // Get the polygon mesh from the inner model
         let mut mesh = self.model.to_polygon_mesh()?;
+
+        // A negative determinant mirrors the geometry, flipping the face winding
+        let flip_winding = self.transformation.to_matrix().determinant() < 0.0;
 
         // Apply the transformation to all vertices
         for vertex in &mut mesh.vertices {
@@ -174,6 +227,9 @@ where
         // Update polygon normals
         for polygon in &mut mesh.polygons {
             polygon.normal = self.transformation.transform_normal(polygon.normal);
+            if flip_winding {
+                polygon.indices.reverse();
+            }
         }
 
         Ok(mesh)
@@ -582,7 +638,10 @@ mod tests {
         let original_mesh = model.to_polygon_mesh().unwrap();
         let transformed_mesh = transform.to_polygon_mesh().unwrap();
 
-        assert_eq!(original_mesh.vertex_count(), transformed_mesh.vertex_count());
+        assert_eq!(
+            original_mesh.vertex_count(),
+            transformed_mesh.vertex_count()
+        );
         assert_eq!(
             original_mesh.polygon_count(),
             transformed_mesh.polygon_count()
@@ -863,5 +922,150 @@ mod tests {
         assert!(approx_eq(pos.x, 10.0));
         assert!(approx_eq(pos.y, 2.0));
         assert!(approx_eq(pos.z, 0.0));
+    }
+
+    // ==================== Winding fix tests ====================
+
+    #[test]
+    fn test_negative_scale_flips_winding() {
+        let model = TestCubeModel;
+        let transform = Transform::with_uniform_scale(-1.0, model.clone());
+
+        let original_mesh = model.to_polygon_mesh().unwrap();
+        let transformed_mesh = transform.to_polygon_mesh().unwrap();
+
+        for (orig, trans) in original_mesh
+            .polygons
+            .iter()
+            .zip(transformed_mesh.polygons.iter())
+        {
+            let mut reversed = orig.indices.clone();
+            reversed.reverse();
+            assert_eq!(trans.indices, reversed);
+        }
+    }
+
+    #[test]
+    fn test_positive_scale_preserves_winding() {
+        let model = TestCubeModel;
+        let transform = Transform::with_uniform_scale(2.0, model.clone());
+
+        let original_mesh = model.to_polygon_mesh().unwrap();
+        let transformed_mesh = transform.to_polygon_mesh().unwrap();
+
+        for (orig, trans) in original_mesh
+            .polygons
+            .iter()
+            .zip(transformed_mesh.polygons.iter())
+        {
+            assert_eq!(trans.indices, orig.indices);
+        }
+    }
+
+    #[test]
+    fn test_rotation_preserves_winding() {
+        let model = TestCubeModel;
+        let transform = Transform::with_rotation_z(FRAC_PI_2, model.clone());
+
+        let original_mesh = model.to_polygon_mesh().unwrap();
+        let transformed_mesh = transform.to_polygon_mesh().unwrap();
+
+        for (orig, trans) in original_mesh
+            .polygons
+            .iter()
+            .zip(transformed_mesh.polygons.iter())
+        {
+            assert_eq!(trans.indices, orig.indices);
+        }
+    }
+
+    // ==================== Validation tests ====================
+
+    #[test]
+    fn test_validate_valid_transformations() {
+        let transformations = vec![
+            Transformation::Matrix(DMat4::IDENTITY),
+            Transformation::Quaternion(DQuat::IDENTITY),
+            Transformation::Translation(DVec3::new(1.0, 2.0, 3.0)),
+            Transformation::UniformScale(0.0),
+            Transformation::UniformScale(-1.0),
+            Transformation::ScaleXYZ(DVec3::new(-1.0, 2.0, 3.0)),
+            Transformation::RotationX(FRAC_PI_2),
+            Transformation::RotationY(FRAC_PI_2),
+            Transformation::RotationZ(FRAC_PI_2),
+        ];
+
+        for transformation in transformations {
+            assert!(transformation.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_validate_nan_matrix() {
+        let mut mat = DMat4::IDENTITY;
+        mat.x_axis.x = f64::NAN;
+        let transformation = Transformation::Matrix(mat);
+
+        let result = transformation.validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_infinite_uniform_scale() {
+        let transformation = Transformation::UniformScale(f64::INFINITY);
+
+        let result = transformation.validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_nan_rotation() {
+        let transformation = Transformation::RotationX(f64::NAN);
+
+        let result = transformation.validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_nan_translation() {
+        let transformation = Transformation::Translation(DVec3::new(1.0, f64::NAN, 3.0));
+
+        let result = transformation.validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_nan_quaternion() {
+        let transformation = Transformation::Quaternion(DQuat::from_xyzw(f64::NAN, 0.0, 0.0, 1.0));
+
+        let result = transformation.validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_geometry_model_rejects_nan_transformation() {
+        let model = TestTriangleModel;
+        let transform = Transform::with_uniform_scale(f64::NAN, model);
+
+        let result = transform.to_polygon_mesh();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
     }
 }
