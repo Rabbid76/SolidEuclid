@@ -59,6 +59,15 @@ Skills provide deep domain knowledge for AI agents. Load them when the task matc
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | [check-markdown-links.js](./scripts/check-markdown-links.js) | Checks the relative links of markdown files: `node .agents/scripts/check-markdown-links.js <file.md> …` |
 
+### Architecture and Development
+
+High-level living reference for navigating the codebase and running its toolchain.
+
+| Document                                       | Description                                                                                                     |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [architecture.md](./architecture.md)           | Codebase map: module index, geometry types, mesh pipeline, bridge surfaces, data flow, invariants, dependencies |
+| [development-guide.md](./development-guide.md) | Build, test, lint, debug and deployment commands; test suite patterns; project layout; common pitfalls          |
+
 ### User-Facing Documentation
 
 Living reference for users and developers is the [README.md](../README.md) and the rustdoc of the
@@ -172,12 +181,12 @@ Every analysis document should include:
 
 ## Where Documentation Goes
 
-| What you produced                                        | Where it goes                                  | Lifecycle                                                                                                                   |
-| -------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Living reference** — how things work now               | `.agents/skills/`, `README.md`, rustdoc        | Updated when behaviour changes; says what holds today — never what was wrong, when something was solved, or a ticket number |
-| **Historical record** — analysis, benchmark, refactoring | `.agents/<analysis-type>/`                     | Never updated after close-out; deleted once the work has landed                                                             |
-| **Decision** — why code is shaped this way               | `.agents/decisions/` (create folder if needed) | Living reference                                                                                                            |
-| **Open work**                                            | `.agents/backlog/README.md`                    | Removed when the fix is in the code                                                                                         |
+| What you produced                                        | Where it goes                                                                                      | Lifecycle                                                                                                                   |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Living reference** — how things work now               | `.agents/skills/`, `.agents/architecture.md`, `.agents/development-guide.md`, `README.md`, rustdoc | Updated when behaviour changes; says what holds today — never what was wrong, when something was solved, or a ticket number |
+| **Historical record** — analysis, benchmark, refactoring | `.agents/<analysis-type>/`                                                                         | Never updated after close-out; deleted once the work has landed                                                             |
+| **Decision** — why code is shaped this way               | `.agents/decisions/` (create folder if needed)                                                     | Living reference                                                                                                            |
+| **Open work**                                            | `.agents/backlog/README.md`                                                                        | Removed when the fix is in the code                                                                                         |
 
 ## Adding New Documentation
 
