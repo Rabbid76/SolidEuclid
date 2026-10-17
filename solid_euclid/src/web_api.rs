@@ -602,7 +602,7 @@ mod tests {
     use crate::planar_profile::{Corner, PathCommand, ProfileCommand};
     use crate::platonic_solid::{Material, PlatonicSolid};
     use crate::sphere::Sphere;
-    use glam::{DVec2, DVec3};
+    use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
 
     #[test]
     fn test_hello_wasm() {
@@ -2712,6 +2712,36 @@ mod tests {
         let transform = Transform::with_uniform_scale(f64::NAN, hexahedron_any_model());
         let result = transform.to_triangular_mesh();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_transform_rejects_non_affine_matrix() {
+        // Finite, but the last row is [0, 0, 0, -1]
+        let mat = DMat4::from_diagonal(DVec4::new(1.0, 1.0, 1.0, -1.0));
+        let transform = Transform::with_matrix(mat, hexahedron_any_model());
+        let result = transform.to_triangular_mesh();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_transform_rejects_non_unit_quaternion() {
+        // Finite, but length sqrt(2) instead of a pure rotation
+        let quat = DQuat::from_xyzw(0.0, 0.0, 1.0, 1.0);
+        let transform = Transform::with_quaternion(quat, hexahedron_any_model());
+        let result = transform.to_triangular_mesh();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_transform_zero_scale_finite_normals() {
+        let transform = Transform::with_uniform_scale(0.0, hexahedron_any_model());
+        let mesh = create_mesh_from_transform(transform);
+
+        let geometry = mesh.get_geometry(0).unwrap();
+        assert!(!geometry.normals.is_empty());
+        for component in &geometry.normals {
+            assert!(component.is_finite());
+        }
     }
 
     #[test]

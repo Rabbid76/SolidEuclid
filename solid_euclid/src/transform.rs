@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 /// to geometry vertices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Transformation {
-    /// A full 4x4 transformation matrix.
+    /// An affine 4x4 transformation matrix (last row `[0, 0, 0, 1]`).
     Matrix(DMat4),
-    /// A rotation represented as a quaternion.
+    /// A rotation represented as a unit quaternion.
     Quaternion(DQuat),
     /// A translation vector.
     Translation(DVec3),
@@ -66,22 +66,46 @@ impl Transformation {
 
     /// Transforms a normal vector using this transformation.
     ///
-    /// Normals require special handling - they are transformed using
-    /// the inverse transpose of the transformation matrix to preserve
-    /// perpendicularity. The result is normalized.
+    /// Normals are transformed with the cofactor (adjugate) transpose of the
+    /// linear part of the transformation matrix, which preserves
+    /// perpendicularity like the inverse transpose but, unlike the inverse,
+    /// is also defined for singular matrices: a collapsing transform (for
+    /// example a zero scale) yields finite normals instead of NaN. For
+    /// invertible matrices the adjugate is the determinant times the inverse,
+    /// so a negative determinant (mirroring) flips the sign, matching the
+    /// flipped winding. Faces that collapse to a line or point have no
+    /// geometric normal; they keep their original normal. The result is
+    /// normalized.
     pub fn transform_normal(&self, normal: DVec3) -> DVec3 {
         let mat = self.to_matrix();
-        // For normals, we need to use the inverse transpose
-        let normal_matrix = mat.inverse().transpose();
-        let norm4 = DVec4::new(normal.x, normal.y, normal.z, 0.0);
-        let result = normal_matrix * norm4;
-        DVec3::new(result.x, result.y, result.z).normalize()
+        let row0 = DVec3::new(mat.x_axis.x, mat.y_axis.x, mat.z_axis.x);
+        let row1 = DVec3::new(mat.x_axis.y, mat.y_axis.y, mat.z_axis.y);
+        let row2 = DVec3::new(mat.x_axis.z, mat.y_axis.z, mat.z_axis.z);
+        let transformed = DVec3::new(
+            row1.cross(row2).dot(normal),
+            row2.cross(row0).dot(normal),
+            row0.cross(row1).dot(normal),
+        );
+        let length = transformed.length();
+        if length > 0.0 && length.is_finite() {
+            let mut result = transformed / length;
+            if mat.determinant() < 0.0 {
+                result = -result;
+            }
+            result
+        } else {
+            normal
+        }
     }
 
-    /// Validates that all numeric parameters of the transformation are finite.
+    /// Validates that the transformation parameters are usable.
     ///
     /// NaN or infinite values would produce degenerate geometry, so they are
-    /// rejected with [`GeometryError::InvalidParameter`].
+    /// rejected with [`GeometryError::InvalidParameter`]. Matrices must be
+    /// affine (last row `[0, 0, 0, 1]`), because positions are transformed
+    /// with the homogeneous coordinate discarded. Quaternions must have unit
+    /// length, because [`DMat4::from_quat`] requires one and a non-unit
+    /// quaternion would silently introduce scaling.
     pub fn validate(&self) -> Result<(), GeometryError> {
         fn check(parameter: &str, value: f64) -> Result<(), GeometryError> {
             if value.is_finite() {
@@ -101,13 +125,35 @@ impl Transformation {
                         check(&format!("matrix[{row_index}][{col_index}]"), *value)?;
                     }
                 }
+                // Positions are transformed with w = 1 and the homogeneous
+                // coordinate is discarded, so only affine matrices (last row
+                // [0, 0, 0, 1]) are supported.
+                if [mat.x_axis.w, mat.y_axis.w, mat.z_axis.w, mat.w_axis.w] != [0.0, 0.0, 0.0, 1.0]
+                {
+                    return Err(GeometryError::InvalidParameter {
+                        parameter: "matrix".to_string(),
+                        message: "matrix must be affine (last row [0, 0, 0, 1])".to_string(),
+                    });
+                }
                 Ok(())
             }
             Transformation::Quaternion(quat) => {
                 check("quaternion.x", quat.x)?;
                 check("quaternion.y", quat.y)?;
                 check("quaternion.z", quat.z)?;
-                check("quaternion.w", quat.w)
+                check("quaternion.w", quat.w)?;
+                // DMat4::from_quat requires a unit quaternion; a non-unit one
+                // would silently introduce scaling instead of a pure rotation.
+                // A zero-length quaternion fails this check as well.
+                const UNIT_LENGTH_EPSILON: f64 = 1e-9;
+                let length = quat.length();
+                if (length - 1.0).abs() > UNIT_LENGTH_EPSILON {
+                    return Err(GeometryError::InvalidParameter {
+                        parameter: "quaternion".to_string(),
+                        message: format!("quaternion must have unit length, got length {length}"),
+                    });
+                }
+                Ok(())
             }
             Transformation::Translation(vec) => {
                 check("translation.x", vec.x)?;
@@ -517,6 +563,57 @@ mod tests {
         assert!(vec3_approx_eq(result, DVec3::new(0.0, 1.0, 0.0)));
     }
 
+    #[test]
+    fn test_transform_normal_singular_uniform_scale() {
+        // A zero scale is singular: the inverse does not exist, but the
+        // collapsed geometry keeps its original finite normal
+        let transformation = Transformation::UniformScale(0.0);
+        let normal = DVec3::new(0.0, 0.0, 1.0);
+        let result = transformation.transform_normal(normal);
+        assert!(result.is_finite());
+        assert!(vec3_approx_eq(result, normal));
+    }
+
+    #[test]
+    fn test_transform_normal_singular_scale_xyz() {
+        // The x axis collapses; faces normal to it survive, the rest collapse
+        let transformation = Transformation::ScaleXYZ(DVec3::new(0.0, 1.0, 1.0));
+
+        let result = transformation.transform_normal(DVec3::X);
+        assert!(vec3_approx_eq(result, DVec3::X));
+
+        for normal in [DVec3::NEG_X, DVec3::Y, DVec3::Z] {
+            let result = transformation.transform_normal(normal);
+            assert!(result.is_finite());
+            assert!(vec3_approx_eq(result, normal));
+        }
+    }
+
+    #[test]
+    fn test_transform_normal_matches_inverse_transpose() {
+        // For invertible matrices the cofactor transpose is the determinant
+        // times the inverse transpose, so the normalized result is unchanged
+        for transformation in [
+            Transformation::ScaleXYZ(DVec3::new(2.0, 3.0, 4.0)),
+            Transformation::ScaleXYZ(DVec3::new(-2.0, 3.0, 4.0)),
+            Transformation::RotationX(0.7),
+            Transformation::Matrix(
+                DMat4::from_translation(DVec3::new(1.0, 2.0, 3.0))
+                    * DMat4::from_rotation_y(1.1)
+                    * DMat4::from_scale(DVec3::new(2.0, 0.5, 3.0)),
+            ),
+        ] {
+            let normal = DVec3::new(1.0, 2.0, 3.0).normalize();
+            let mat = transformation.to_matrix();
+            let expected = (mat.inverse().transpose()
+                * DVec4::new(normal.x, normal.y, normal.z, 0.0))
+            .truncate()
+            .normalize();
+            let result = transformation.transform_normal(normal);
+            assert!(vec3_approx_eq(result, expected));
+        }
+    }
+
     // ==================== Transform struct tests ====================
 
     #[test]
@@ -840,6 +937,53 @@ mod tests {
         for vertex in &mesh.vertices {
             assert!(vec3_approx_eq(vertex.position, DVec3::ZERO));
         }
+
+        // The collapsed geometry has no geometric normal; the original finite
+        // normals are kept instead of NaN from inverting a singular matrix
+        for vertex in &mesh.vertices {
+            assert!(vertex.normal.is_finite());
+            assert!(vec3_approx_eq(vertex.normal, DVec3::Z));
+        }
+        for polygon in &mesh.polygons {
+            assert!(polygon.normal.is_finite());
+            assert!(vec3_approx_eq(polygon.normal, DVec3::Z));
+        }
+    }
+
+    #[test]
+    fn test_transform_singular_scale_xyz_keeps_finite_normals() {
+        let model = TestCubeModel;
+        // The x axis collapses; the cube flattens into the y-z plane
+        let transform = Transform::with_scale_xyz(DVec3::new(0.0, 1.0, 1.0), model);
+
+        let mesh = transform.to_polygon_mesh().unwrap();
+
+        for vertex in &mesh.vertices {
+            assert!(approx_eq(vertex.position.x, 0.0));
+            assert!(vertex.position.is_finite());
+            assert!(vertex.normal.is_finite());
+        }
+        for polygon in &mesh.polygons {
+            assert!(polygon.normal.is_finite());
+        }
+
+        // The faces normal to the preserved x axis survive with their normals
+        assert!(vec3_approx_eq(mesh.polygons[4].normal, -DVec3::X)); // left
+        assert!(vec3_approx_eq(mesh.polygons[5].normal, DVec3::X)); // right
+    }
+
+    #[test]
+    fn test_transform_zero_scale_triangular_mesh_has_finite_normals() {
+        let model = TestTriangleModel;
+        let transform = Transform::with_uniform_scale(0.0, model);
+
+        let tri_mesh = transform.to_triangular_mesh().unwrap();
+        let geometry = tri_mesh.get("test_material").unwrap();
+
+        assert!(!geometry.normals.is_empty());
+        for component in &geometry.normals {
+            assert!(component.is_finite());
+        }
     }
 
     #[test]
@@ -1061,6 +1205,89 @@ mod tests {
     fn test_geometry_model_rejects_nan_transformation() {
         let model = TestTriangleModel;
         let transform = Transform::with_uniform_scale(f64::NAN, model);
+
+        let result = transform.to_polygon_mesh();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_accepts_affine_matrix() {
+        let mat = DMat4::from_translation(DVec3::new(1.0, 2.0, 3.0))
+            * DMat4::from_rotation_z(FRAC_PI_2)
+            * DMat4::from_scale(DVec3::splat(2.0));
+        assert!(Transformation::Matrix(mat).validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_non_affine_matrix() {
+        // Finite, but the last row is [0, 0, 0, -1]
+        let mat = DMat4::from_diagonal(DVec4::new(1.0, 1.0, 1.0, -1.0));
+        let result = Transformation::Matrix(mat).validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+
+        // Projective: the last row is [0, 0, 1, 1]
+        let mat = DMat4::from_cols(DVec4::X, DVec4::Y, DVec4::new(0.0, 0.0, 1.0, 1.0), DVec4::W);
+        let result = Transformation::Matrix(mat).validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_accepts_unit_quaternion() {
+        let quat = DQuat::from_axis_angle(DVec3::new(1.0, 2.0, 3.0).normalize(), 0.7);
+        assert!(Transformation::Quaternion(quat).validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_non_unit_quaternion() {
+        // Finite, but length sqrt(2): DMat4::from_quat would introduce scaling
+        let quat = DQuat::from_xyzw(0.0, 0.0, 1.0, 1.0);
+        let result = Transformation::Quaternion(quat).validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_length_quaternion() {
+        let quat = DQuat::from_xyzw(0.0, 0.0, 0.0, 0.0);
+        let result = Transformation::Quaternion(quat).validate();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_geometry_model_rejects_non_affine_matrix() {
+        let model = TestTriangleModel;
+        // Finite but non-affine: the negative determinant would flip the
+        // winding while the discarded homogeneous coordinate leaves the
+        // positions unchanged
+        let mat = DMat4::from_diagonal(DVec4::new(1.0, 1.0, 1.0, -1.0));
+        let transform = Transform::with_matrix(mat, model);
+
+        let result = transform.to_polygon_mesh();
+        assert!(matches!(
+            result,
+            Err(GeometryError::InvalidParameter { .. })
+        ));
+    }
+
+    #[test]
+    fn test_geometry_model_rejects_non_unit_quaternion() {
+        let model = TestTriangleModel;
+        let quat = DQuat::from_xyzw(0.0, 0.0, 1.0, 1.0);
+        let transform = Transform::with_quaternion(quat, model);
 
         let result = transform.to_polygon_mesh();
         assert!(matches!(

@@ -405,6 +405,18 @@ describe('Transform WebAssembly API', () => {
         mesh.free();
       });
 
+      it('should produce finite normals for a zero scale', () => {
+        const mesh = create_transform(transformed(hexahedronModel(), { UniformScale: 0 }));
+        const geo = mesh.get_geometry(0)!;
+
+        expect(geo.normals.length).toBeGreaterThan(0);
+        for (const component of geo.normals) {
+          expect(Number.isFinite(component)).toBe(true);
+        }
+
+        mesh.free();
+      });
+
       it('should have indices within bounds', () => {
         const mesh = create_transform(transformed(hexahedronModel(), { RotationY: 0.7 }));
         const geo = mesh.get_geometry(0)!;
@@ -450,6 +462,22 @@ describe('Transform WebAssembly API', () => {
       it('should throw for a NaN rotation', () => {
         expect(() =>
           create_transform(transformed(hexahedronModel(), { RotationX: NaN }))
+        ).toThrow();
+      });
+
+      it('should throw for a non-affine matrix', () => {
+        expect(() =>
+          create_transform(
+            transformed(hexahedronModel(), {
+              Matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1],
+            })
+          )
+        ).toThrow();
+      });
+
+      it('should throw for a non-unit quaternion', () => {
+        expect(() =>
+          create_transform(transformed(hexahedronModel(), { Quaternion: [0, 0, 1, 1] }))
         ).toThrow();
       });
 

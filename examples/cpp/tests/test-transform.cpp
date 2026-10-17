@@ -113,6 +113,29 @@ TEST_SUITE(
         CHECK(mesh.error_message().contains("Failed to parse"));
     }
 
+    TEST_CASE("create_transform_c returns error for non-affine matrix") {
+        // Finite, but the last row is [0, 0, 0, -1]
+        MeshGuard mesh{create_transform_c(
+            hexahedron_transform_json(
+                R"({"Matrix":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,-1.0]})"
+            )
+                .c_str()
+        )};
+
+        CHECK(mesh.has_error());
+        CHECK(mesh.error_message().contains("affine"));
+    }
+
+    TEST_CASE("create_transform_c returns error for non-unit quaternion") {
+        // Finite, but length sqrt(2) instead of a pure rotation
+        MeshGuard mesh{create_transform_c(
+            hexahedron_transform_json(R"({"Quaternion":[0.0,0.0,1.0,1.0]})").c_str()
+        )};
+
+        CHECK(mesh.has_error());
+        CHECK(mesh.error_message().contains("unit length"));
+    }
+
     TEST_CASE("Translated hexahedron with uniform material") {
         MeshGuard mesh{create_transform_c(
             hexahedron_transform_json(R"({"Translation":[1.0,2.0,3.0]})").c_str()
@@ -336,6 +359,21 @@ TEST_SUITE(
             const auto nz = normals[i + 2];
             const auto length = std::sqrt(nx * nx + ny * ny + nz * nz);
             CHECK(std::abs(length - 1.0f) < 0.001f);
+        }
+    }
+
+    TEST_CASE("Zero scale produces finite normals") {
+        MeshGuard mesh{
+            create_transform_c(hexahedron_transform_json(R"({"UniformScale":0.0})").c_str())
+        };
+
+        REQUIRE_FALSE(mesh.has_error());
+        const auto& geom = mesh.entry(0).geometry;
+        const auto normals = std::span{geom.normals, geom.normals_len};
+
+        CHECK(normals.size() > 0);
+        for (auto component : normals) {
+            CHECK(std::isfinite(component));
         }
     }
 }

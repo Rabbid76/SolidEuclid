@@ -2535,4 +2535,56 @@ mod tests {
             triangular_mesh_free(mesh);
         }
     }
+
+    #[test]
+    fn test_create_transform_c_non_affine_matrix() {
+        // Finite, but the last row is [0, 0, 0, -1]
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Matrix":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,-1.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("affine"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_non_unit_quaternion() {
+        // Finite, but length sqrt(2) instead of a pure rotation
+        let json = CString::new(hexahedron_transform_json(
+            r#"{"Quaternion":[0.0,0.0,1.0,1.0]}"#,
+        ))
+        .unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(!mesh.error.is_null());
+        unsafe {
+            let error = CStr::from_ptr(mesh.error).to_str().unwrap();
+            assert!(error.contains("unit length"));
+            triangular_mesh_free(mesh);
+        }
+    }
+
+    #[test]
+    fn test_create_transform_c_zero_scale_finite_normals() {
+        let json = CString::new(hexahedron_transform_json(r#"{"UniformScale":0.0}"#)).unwrap();
+        let mesh = unsafe { create_transform_c(json.as_ptr()) };
+
+        assert!(mesh.error.is_null(), "Expected no error");
+        unsafe {
+            let geom = &(*mesh.entries).geometry;
+            assert!(geom.normals_len > 0);
+            let normals = std::slice::from_raw_parts(geom.normals, geom.normals_len);
+            for component in normals {
+                assert!(component.is_finite());
+            }
+
+            triangular_mesh_free(mesh);
+        }
+    }
 }
