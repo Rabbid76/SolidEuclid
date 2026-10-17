@@ -34,9 +34,10 @@ deliberately rejected. Read these before proposing a change to an area they cove
 ADR documents in `.agents/decisions/` as needed, following the
 [RoomleCore pattern](https://github.com/roomle-internal/RoomleCore/blob/master/documentation/decisions/README.md).
 
-| ADR                                                                                                                             | Status   |
-| ------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [0001 — GeometryModel is the single mesh-conversion contract](decisions/0001-geometry-model-as-the-mesh-conversion-contract.md) | Accepted |
+| ADR                                                                                                                                  | Status   |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| [0001 — GeometryModel is the single mesh-conversion contract](decisions/0001-geometry-model-as-the-mesh-conversion-contract.md)      | Accepted |
+| [0002 — Model transformations: AnyModel enum, bridge exposure, and design decisions](decisions/0002-model-transformations-design.md) | Accepted |
 
 ---
 
@@ -91,8 +92,9 @@ One document per bug: root-cause analysis written **before** the fix, closed out
 One document per feature question: a proposed feature, a change to an existing one, or _why_ a
 feature behaves the way it does. Written **before** the work, closed out **after** it.
 
-| Document | Status | Last touched |
-| -------- | ------ | ------------ |
+| Document                                                           | Status | Last touched |
+| ------------------------------------------------------------------ | ------ | ------------ |
+| [Model transformations](feature-analysis/model-transformations.md) | Open   | 2026-10-17   |
 
 ### Refactoring Analyses
 

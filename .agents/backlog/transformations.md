@@ -33,24 +33,37 @@ including the transform tests.
 
 ## What is missing
 
-### 1. Bridge deserialization is not possible with the generic `Transform<T>`
+### 1. Bridge deserialization: AnyModel enum in model.rs
 
 `Transform<T>` derives `Serialize`/`Deserialize`, but `T` is a generic type parameter. The bridges
 parse JSON into a concrete type — `serde_json::from_str::<Transform<???>>` has no concrete `T` to
 substitute. The unit tests in `transform.rs` only test serialization with a private
 `TestTriangleModel`, which is not reachable from JSON.
 
-To make transformations usable from the bridges, the kernel needs a way to deserialize a
-`Transform` wrapping any geometry model from JSON. Options (not prescribed here — this is a
-design decision for the implementation):
+**Decision (ADR [0002](../decisions/0002-model-transformations-design.md)):** a new
+`solid_euclid/src/model.rs` module defines `AnyModel`, a serde-serializable enum wrapping all 7
+concrete geometry types plus a `Transform(Box<Transform<AnyModel>>)` variant for nested
+transformations:
 
-- An enum-based `Model` type that covers all geometry types (platonic solid, sphere, torus,
-  capsule, cylinder, conical frustum, extrude) and can be wrapped in `Transform<ModelEnum>`.
-- A `Box<dyn GeometryModel>` approach with a custom deserializer.
-- Separate `Transform` variants per geometry type.
+```rust
+pub enum AnyModel {
+    PlatonicSolid(platonic_solid::Model),
+    Sphere(sphere::Model),
+    Torus(Torus),
+    Capsule(Capsule),
+    Cylinder(Cylinder),
+    ConicalFrustum(ConicalFrustum),
+    Extrude(Extrude),
+    Transform(Box<Transform<AnyModel>>),
+}
+```
 
-Whatever approach is chosen, the JSON contract must be documented in rustdoc on the bridge
-functions, matching the pattern of every existing `create_*` function.
+`AnyModel` implements `GeometryModel` by delegating to the inner variant. The bridge functions
+deserialize `Transform<AnyModel>`. The enum uses serde's default externally-tagged representation,
+consistent with `Material::Uniform`. The `Transform` variant enables nested transformations in JSON.
+
+The JSON contract must be documented in rustdoc on the bridge functions, matching the pattern of
+every existing `create_*` function.
 
 ### 2. Web API function
 
@@ -120,9 +133,10 @@ Once the bridge deserialization approach is chosen, additional unit tests are ne
 
 The feature is complete when all of the following hold:
 
-1. **Rust core** — a JSON-deserializable `Transform` wrapper exists (or an equivalent mechanism)
-   that can wrap any existing geometry type. Unit tests cover deserialization from JSON for at
-   least two different inner geometry types, plus error cases.
+1. **Rust core** — `solid_euclid/src/model.rs` defines `AnyModel` (7 geometry variants + `Transform`
+   variant for nesting), implements `GeometryModel`, and is registered in `lib.rs`. Unit tests cover
+   deserialization from JSON for at least two different inner geometry types, plus error cases.
+   `transform.rs` has the negative-scale winding fix, `GeometryHash` impl, and NaN/Inf validation.
 
 2. **Web API** — `create_transform` is exported from `web_api.rs` with a rustdoc comment
    documenting the accepted JSON and a TypeScript example. The function is covered by Rust unit
@@ -148,27 +162,33 @@ The feature is complete when all of the following hold:
 8. **Lint and format** — `npm run lint`, `npm run format:check`, `cargo fmt --check` all pass.
 
 9. **Documentation** — the `solid-euclid-geometry-model.md` skill file is updated to mention
-   `transform::Transform` as an implementor of `GeometryModel`. The `solid-euclid-web-api.md` and
-   `solid-euclid-c-api.md` skill files list the new `create_transform` / `create_transform_c`
-   functions in their function surface tables.
+   `transform::Transform` and `model::AnyModel` as implementors of `GeometryModel`. The
+   `solid-euclid-web-api.md` and `solid-euclid-c-api.md` skill files list the new
+   `create_transform` / `create_transform_c` functions in their function surface tables.
+   `.agents/architecture.md` includes `model.rs` and `transform.rs` in the module map.
 
 ## Known design considerations
 
+All resolved — see ADR [0002](../decisions/0002-model-transformations-design.md) and the
+[feature analysis](../feature-analysis/model-transformations.md).
+
 - **Normal transformation** — `transform_normal` uses the inverse-transpose of the matrix, which
-  is correct for non-uniform scaling. The unit tests verify this for uniform scale and rotation.
-  Non-uniform scale with skew (via `Matrix`) is handled by the same code path but is not
-  explicitly tested — worth adding a test.
+  is correct for non-uniform scaling. Non-uniform scale with skew (via `Matrix`) is handled by the
+  same code path but is not explicitly tested — worth adding a test.
 
-- **Negative scale / mirroring** — a negative scale factor flips the winding of polygons. The
-  current implementation transforms normals but does not flip polygon winding. This means a
-  mirrored geometry will have inverted normals on the GPU. This is a known limitation that should
-  be addressed (either by flipping winding when the determinant is negative, or by documenting
-  the limitation).
+- **Negative scale / mirroring** — in scope. When the determinant is negative, polygon winding
+  must be flipped to keep outward-facing normals. `Transform<T>::to_polygon_mesh()` checks
+  `mat.determinant() < 0.0` and reverses polygon index order.
 
-- **UV coordinates** — the current `to_polygon_mesh` implementation transforms positions and
-  normals but leaves UVs unchanged. For most transformations this is correct (UVs are
-  parameter-space, not world-space), but for completeness the behavior should be documented.
+- **UV coordinates** — unchanged by design. UVs are texture-space coordinates; the texture
+  stretches with the mesh (standard behavior in three.js, Blender, etc.).
 
-- **GeometryHash** — `transform.rs` does not implement `GeometryHash`. If the hash is used for
-  caching or identity, transformed geometry should probably hash differently from the untransformed
-  original. This is worth investigating when the bridge functions are added.
+- **GeometryHash** — `Transform<T>` implements `GeometryHash` by delegating to the resulting
+  `PolygonMesh`'s hash. A transformed geometry hashes differently from the original.
+
+- **Validation** — NaN or Inf values in transformation parameters return
+  `GeometryError::InvalidParameter`. Zero or negative scale is allowed (mathematically valid,
+  just degenerate).
+
+- **Scope** — transformations only. CSG operators are out of scope. `AnyModel` is designed so CSG
+  can reuse it as its operand type later.
