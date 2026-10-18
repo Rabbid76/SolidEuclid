@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [wasm()],
   resolve: {
     alias: {
-      '@solid-euclid': resolve(__dirname, 'pkg'),
+      '@solid-euclid': resolve(import.meta.dirname, 'pkg'),
     },
   },
   test: {

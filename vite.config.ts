@@ -7,21 +7,21 @@ export default defineConfig({
   plugins: [wasm()],
   resolve: {
     alias: {
-      '@solid-euclid': resolve(__dirname, 'pkg'),
+      '@solid-euclid': resolve(import.meta.dirname, 'pkg'),
     },
   },
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(import.meta.dirname, 'dist'),
     emptyOutDir: true,
     target: 'esnext',
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'examples/web/index.html'),
-        platonic_solid: resolve(__dirname, 'examples/web/platonic_solid/index.html'),
-        sphere: resolve(__dirname, 'examples/web/sphere/index.html'),
-        sweeps: resolve(__dirname, 'examples/web/sweeps/index.html'),
-        extrude: resolve(__dirname, 'examples/web/extrude/index.html'),
-        transform: resolve(__dirname, 'examples/web/transform/index.html'),
+        main: resolve(import.meta.dirname, 'examples/web/index.html'),
+        platonic_solid: resolve(import.meta.dirname, 'examples/web/platonic_solid/index.html'),
+        sphere: resolve(import.meta.dirname, 'examples/web/sphere/index.html'),
+        sweeps: resolve(import.meta.dirname, 'examples/web/sweeps/index.html'),
+        extrude: resolve(import.meta.dirname, 'examples/web/extrude/index.html'),
+        transform: resolve(import.meta.dirname, 'examples/web/transform/index.html'),
       },
     },
   },

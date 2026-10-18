@@ -324,9 +324,9 @@ describe('Extrude WebAssembly API', () => {
         const normals = geo.normals;
 
         for (let i = 0; i < normals.length; i += 3) {
-          const nx = normals[i];
-          const ny = normals[i + 1];
-          const nz = normals[i + 2];
+          const nx = normals[i]!;
+          const ny = normals[i + 1]!;
+          const nz = normals[i + 2]!;
           const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
           expect(length).toBeCloseTo(1.0, 2);
         }
@@ -458,9 +458,10 @@ describe('Extrude WebAssembly API', () => {
       it('should create a pentagon extrusion', () => {
         // Regular pentagon vertices
         const angle = (2 * Math.PI) / 5;
-        const commands = [
-          { path: { Move: { point: [Math.cos(0), Math.sin(0)] } }, corner: 'Edge' },
-        ];
+        const commands: Array<{
+          path: { Move?: { point: number[] }; Line?: { point: number[] } };
+          corner: string | { Fillet?: { radius: number } };
+        }> = [{ path: { Move: { point: [Math.cos(0), Math.sin(0)] } }, corner: 'Edge' }];
         for (let i = 1; i <= 5; i++) {
           const a = i * angle;
           commands.push({
@@ -486,9 +487,10 @@ describe('Extrude WebAssembly API', () => {
       it('should create a hexagon extrusion with filleted corners', () => {
         // Regular hexagon vertices
         const angle = (2 * Math.PI) / 6;
-        const commands = [
-          { path: { Move: { point: [Math.cos(0), Math.sin(0)] } }, corner: 'Edge' },
-        ];
+        const commands: Array<{
+          path: { Move?: { point: number[] }; Line?: { point: number[] } };
+          corner: string | { Fillet?: { radius: number } };
+        }> = [{ path: { Move: { point: [Math.cos(0), Math.sin(0)] } }, corner: 'Edge' }];
         for (let i = 1; i <= 6; i++) {
           const a = i * angle;
           commands.push({
@@ -667,9 +669,9 @@ describe('Extrude WebAssembly API', () => {
         // Verify normals are normalized
         const normals = geo!.normals;
         for (let i = 0; i < normals.length; i += 3) {
-          const nx = normals[i];
-          const ny = normals[i + 1];
-          const nz = normals[i + 2];
+          const nx = normals[i]!;
+          const ny = normals[i + 1]!;
+          const nz = normals[i + 2]!;
           const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
           expect(length).toBeCloseTo(1.0, 2);
         }

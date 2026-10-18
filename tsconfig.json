@@ -5,7 +5,7 @@
     "module": "ESNext",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
-    "types": ["three"],
+    "types": ["three", "node"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",
@@ -15,9 +15,8 @@
     "noEmit": true,
 
     /* Path aliases */
-    "baseUrl": ".",
     "paths": {
-      "@solid-euclid": ["pkg/solid_euclid"]
+      "@solid-euclid": ["./pkg/solid_euclid"]
     },
 
     /* Linting */
