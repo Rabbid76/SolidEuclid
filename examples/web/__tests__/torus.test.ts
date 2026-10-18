@@ -222,9 +222,9 @@ describe('Torus WebAssembly API', () => {
         const geo = mesh.get_geometry(0)!;
 
         for (let i = 0; i < geo.normals.length; i += 3) {
-          const nx = geo.normals[i];
-          const ny = geo.normals[i + 1];
-          const nz = geo.normals[i + 2];
+          const nx = geo.normals[i]!;
+          const ny = geo.normals[i + 1]!;
+          const nz = geo.normals[i + 2]!;
           const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
           expect(length).toBeCloseTo(1.0, 2);
         }

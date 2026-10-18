@@ -397,7 +397,7 @@ async function main() {
 
     console.log(`Profile commands (${allCommands.length} total):`);
     allCommands.forEach((cmd, i) => {
-      const pathType = Object.keys(cmd.path)[0];
+      const pathType = Object.keys(cmd.path)[0]!;
       const pathPoint = (cmd.path as Record<string, { point: number[] }>)[pathType]?.point;
       const cornerStr = typeof cmd.corner === 'string' ? cmd.corner : JSON.stringify(cmd.corner);
       console.log(

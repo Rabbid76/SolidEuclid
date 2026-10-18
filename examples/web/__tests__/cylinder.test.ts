@@ -426,9 +426,9 @@ describe('Cylinder WebAssembly API', () => {
         const normals = geo.normals;
 
         // Check first normal
-        const nx = normals[0];
-        const ny = normals[1];
-        const nz = normals[2];
+        const nx = normals[0]!;
+        const ny = normals[1]!;
+        const nz = normals[2]!;
         const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
 
         expect(length).toBeCloseTo(1.0, 1);
